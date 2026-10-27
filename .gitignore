@@ -7,3 +7,9 @@ node_modules/
 research/
 *.bak.md
 .DS_Store
+
+# Local planning files, never committed
+GAME-PLAN.md
+BUILD-PLAN.md
+CLAUDE.md
+AGENTS.md
