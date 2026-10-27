@@ -13,3 +13,8 @@ GAME-PLAN.md
 BUILD-PLAN.md
 CLAUDE.md
 AGENTS.md
+
+# Next.js / TypeScript build output
+next-env.d.ts
+*.tsbuildinfo
+coverage/
