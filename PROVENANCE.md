@@ -35,4 +35,6 @@ Smoke results (one call per model through the gateway, $10 run cap, synthetic in
 
 Total settled: $0.014622. Settled figures are the gateway's computed cost from provider-reported units; reconcile against Billing.
 
+- 2026-10-27 23:40 IST, Day 1 close-out: the API key value from the local env file was searched across all 6 commits then in history (0 hits) and all tracked files (0 hits). Added `scripts/secret-scan.sh` (commit `762ebe5`): scans staged content, or all tracked files with `--all`, with one exact allowlist entry for the runtime auth-header line in `src/lib/gateway/meta-dispatcher.ts`. A local pre-push hook runs it with `--all`.
+
 ## Third-party
