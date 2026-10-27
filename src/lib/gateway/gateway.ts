@@ -1,0 +1,127 @@
+import { DEFAULT_BOUNDS, type GatewayBounds } from "./config";
+import { PreDispatchError } from "./errors";
+import type { SpendLedger } from "./ledger";
+import type { NanoUsd } from "./money";
+import { actualCost, estimateMaxCost } from "./pricing";
+import type { AttemptRecord, DenyReason, DispatchResult, Dispatcher, GatewayResult, ModelCall } from "./types";
+
+export type GatewayOptions = {
+  ledger: SpendLedger;
+  dispatcher: Dispatcher;
+  bounds?: Partial<GatewayBounds>;
+  /** Scope every call to one run with its own cap (e.g. a $10 smoke run). */
+  run?: { id: string; capNano: NanoUsd };
+  now?: () => number;
+};
+
+const ERROR_BODY_LIMIT = 2_000;
+
+export function boundsViolation(call: ModelCall, b: GatewayBounds): string | null {
+  if (call.round !== undefined && (!Number.isInteger(call.round) || call.round < 1 || call.round > b.maxRounds)) {
+    return `round ${call.round} outside 1..${b.maxRounds}`;
+  }
+  switch (call.kind) {
+    case "chat": {
+      if (!Number.isInteger(call.maxOutputTokens) || call.maxOutputTokens < 1 || call.maxOutputTokens > b.maxOutputTokens) {
+        return `maxOutputTokens ${call.maxOutputTokens} outside 1..${b.maxOutputTokens}`;
+      }
+      const bytes = call.messages.reduce((n, m) => n + Buffer.byteLength(m.content, "utf8"), 0);
+      if (bytes > b.maxInputBytes) return `input ${bytes} bytes > ${b.maxInputBytes}`;
+      return null;
+    }
+    case "transcribe":
+      return call.audio.byteLength > b.maxMediaBytes ? `audio ${call.audio.byteLength} bytes > ${b.maxMediaBytes}` : null;
+    case "image":
+      if (!Number.isInteger(call.n) || call.n < 1 || call.n > b.maxImagesPerCall) {
+        return `n ${call.n} outside 1..${b.maxImagesPerCall}`;
+      }
+      return Buffer.byteLength(call.prompt, "utf8") > b.maxInputBytes ? "prompt too long" : null;
+    case "segment":
+      return call.image.byteLength > b.maxMediaBytes ? `image ${call.image.byteLength} bytes > ${b.maxMediaBytes}` : null;
+  }
+}
+
+/**
+ * The only path to a billable model call. Each attempt (first try and every
+ * retry) reserves its conservative maximum cost before dispatch and settles to
+ * the provider-reported cost afterward; when the provider reports no units the
+ * attempt settles at the full reservation.
+ */
+export class SpendGateway {
+  private readonly bounds: GatewayBounds;
+  private readonly now: () => number;
+
+  constructor(private readonly opts: GatewayOptions) {
+    this.bounds = { ...DEFAULT_BOUNDS, ...opts.bounds };
+    this.now = opts.now ?? (() => performance.now());
+  }
+
+  async call(call: ModelCall): Promise<GatewayResult> {
+    const attempts: AttemptRecord[] = [];
+    const deny = (reason: DenyReason, detail: string): GatewayResult => ({
+      outcome: "denied",
+      model: call.model,
+      reason,
+      detail,
+      attempts,
+      reservedNano: sum(attempts, "reservedNano"),
+      settledNano: sum(attempts, "settledNano"),
+    });
+
+    const violation = boundsViolation(call, this.bounds);
+    if (violation) return deny("bounds_exceeded", violation);
+
+    const estimate = estimateMaxCost(call);
+    if (estimate === null || !Number.isSafeInteger(estimate) || estimate <= 0) {
+      return deny("unknown_cost", `no bounded price for ${call.kind} on ${call.model}`);
+    }
+
+    const { ledger, dispatcher, run } = this.opts;
+    const maxAttempts = 1 + this.bounds.maxRetries;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const r = await ledger.reserve({ amountNano: estimate, model: call.model, runId: run?.id, runCapNano: run?.capNano });
+      if (!r.granted) return deny(r.reason, r.detail);
+
+      const started = this.now();
+      let result: DispatchResult;
+      try {
+        result = await dispatcher.dispatch(call);
+      } catch (err) {
+        if (err instanceof PreDispatchError) {
+          await ledger.release(r.reservationId);
+          return deny(err.reason, err.message);
+        }
+        // The request may have reached the provider; treat it as billed.
+        result = { ok: false, status: 0, retryable: true, units: null, errorBody: errorText(err) };
+      }
+      const latencyMs = Math.round(this.now() - started);
+      const settledNano = actualCost(call, result.units) ?? estimate;
+      await ledger.settle(r.reservationId, settledNano);
+      attempts.push({ attempt, status: result.status, reservedNano: estimate, settledNano, latencyMs });
+
+      if (result.ok || !result.retryable || attempt === maxAttempts) {
+        return {
+          outcome: result.ok ? "ok" : "failed",
+          model: call.model,
+          status: result.status,
+          output: result.output,
+          errorBody: result.errorBody?.slice(0, ERROR_BODY_LIMIT),
+          attempts,
+          reservedNano: sum(attempts, "reservedNano"),
+          settledNano: sum(attempts, "settledNano"),
+          latencyMs: sum(attempts, "latencyMs"),
+        };
+      }
+    }
+    throw new Error("unreachable");
+  }
+}
+
+function sum(attempts: AttemptRecord[], key: "reservedNano" | "settledNano" | "latencyMs"): number {
+  return attempts.reduce((n, a) => n + a[key], 0);
+}
+
+function errorText(err: unknown): string {
+  const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return msg.slice(0, ERROR_BODY_LIMIT);
+}
