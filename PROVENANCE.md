@@ -54,3 +54,9 @@ Deployment: Vercel project `aibosspro-brain-hackathon`, production at `https://a
 Live checks on production, 2026-10-28 12:54 IST: GET with a wrong verify token returned 403; GET with the correct token returned 200 with the challenge echoed; POST with a bad signature returned 401; POST with no signature returned 401; a correctly signed POST with no messages returned 200. No WhatsApp message was sent by these checks.
 
 ## Third-party
+
+## Day 2 close — 2026-10-28 (channel live)
+- Permanent System User token (no expiry) replaces temp token; sees test number 555-175-0081.
+- WhatsApp round-trip confirmed on real phone: inbound "test" -> brain echo reply, signature-checked, 3:21pm Israel.
+- Webhook registered + active, messages field subscribed, Vercel production redeployed.
+- Gate met: live channel, deployed app, judge-accessible URL.
