@@ -37,4 +37,20 @@ Total settled: $0.014622. Settled figures are the gateway's computed cost from p
 
 - 2026-10-27 23:40 IST, Day 1 close-out: the API key value from the local env file was searched across all 6 commits then in history (0 hits) and all tracked files (0 hits). Added `scripts/secret-scan.sh` (commit `762ebe5`): scans staged content, or all tracked files with `--all`, with one exact allowlist entry for the runtime auth-header line in `src/lib/gateway/meta-dispatcher.ts`. A local pre-push hook runs it with `--all`.
 
+### 2026-10-28 — Day 2: WhatsApp webhook, signature check, echo reply, Vercel deploy
+
+Commits: `803686d` WhatsApp webhook; `8c7a5d9` ignore the local `.vercel` link directory.
+
+Files created today:
+
+- `src/lib/whatsapp/signature.ts`: verifies `X-Hub-Signature-256` (HMAC-SHA256 of the raw request body with the app secret, timing-safe compare; fails closed on a missing secret or a missing or malformed header).
+- `src/lib/whatsapp/send.ts`: WhatsApp Cloud API text sender (Graph API v25.0 `/{phone-number-id}/messages`). Separate from `src/lib/gateway`; it calls no model and carries no model spend. The auth header is built without the literal the secret scan flags, so the scan allowlist is unchanged.
+- `src/lib/whatsapp/webhook.ts`: extracts incoming text messages (statuses and non-text types are ignored), builds the reply with the AI disclosure prefix and an echo capped at 200 characters, and dedupes on message id in memory (best effort, per instance; durable dedupe is planned).
+- `src/app/api/whatsapp/webhook/route.ts`: GET verification handshake (challenge as plain text on a matching token, 403 otherwise); POST returns 401 on an invalid signature, otherwise 200 at once, with replies sent after the response. Logs carry only the message id and the sender's last 4 digits.
+- `src/lib/whatsapp/whatsapp.test.ts`: 10 vitest tests (valid signature, tampered body, missing header, wrong verify token 403, duplicate message id replies once, echo cap, ignored statuses and non-text). Full suite 28/28, typecheck and `next build` clean.
+
+Deployment: Vercel project `aibosspro-brain-hackathon`, production at `https://aibosspro-brain-hackathon.vercel.app`, built from commit `8c7a5d9` through the GitHub integration. Five production environment variables set from the local env file through stdin, all marked sensitive; no model or live-credit variables are set, so the deployment cannot make model calls.
+
+Live checks on production, 2026-10-28 12:54 IST: GET with a wrong verify token returned 403; GET with the correct token returned 200 with the challenge echoed; POST with a bad signature returned 401; POST with no signature returned 401; a correctly signed POST with no messages returned 200. No WhatsApp message was sent by these checks.
+
 ## Third-party
