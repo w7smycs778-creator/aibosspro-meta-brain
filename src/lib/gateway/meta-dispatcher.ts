@@ -1,12 +1,11 @@
 // The only module that talks to the Meta Model API. It is constructed by
 // createLiveGateway() and must never be called except through SpendGateway.
-import type { Storage } from "../storage/types";
-import { HostedInferenceBlockedError, LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
-import type { BillingUnits, DispatchResult, Dispatcher, Env, ModelCall } from "./types";
+import { LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
+import { assertLiveInferenceAllowed, type LedgerProbe } from "./live-gate";
+import { decodeJsonMode, decodeNative, encodeJsonMode, encodeNative, toolMode, type DecodedStep } from "./tool-protocol";
+import type { BillingUnits, ChatCall, DispatchResult, Dispatcher, Env, ModelCall, ToolCallRequest } from "./types";
 
 type FetchFn = typeof fetch;
-/** The store holding the spend ledger this dispatcher's gateway writes to. */
-type LedgerProbe = Pick<Storage, "backend" | "ping">;
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const ERROR_BODY_LIMIT = 2_000;
@@ -18,32 +17,14 @@ export class MetaDispatcher implements Dispatcher {
     private readonly ledgerStore?: LedgerProbe,
   ) {}
 
-  /** Hosted inference gate, run by the gateway before any reservation. */
+  /** Live inference gate (src/lib/gateway/live-gate.ts), run by the gateway before any reservation. */
   async preflight(): Promise<void> {
-    this.assertHostedAllowed();
-    try {
-      await this.ledgerStore!.ping();
-    } catch {
-      throw new HostedInferenceBlockedError("the Supabase spend ledger table is unreachable");
-    }
-  }
-
-  // Read at call time so the guard cannot be bypassed by early construction.
-  private assertHostedAllowed(): void {
-    if (this.env.LIVE_CREDITS_VERIFIED !== "true") throw new LiveCreditsNotVerifiedError();
-    if (this.env.STORAGE_BACKEND !== "supabase") {
-      throw new HostedInferenceBlockedError("STORAGE_BACKEND is not 'supabase', so the spend ledger is not durable in Postgres");
-    }
-    if (this.ledgerStore?.backend !== "supabase") {
-      throw new HostedInferenceBlockedError("the gateway's spend ledger is not the Supabase store");
-    }
+    await assertLiveInferenceAllowed(this.env, this.ledgerStore);
   }
 
   async dispatch(call: ModelCall): Promise<DispatchResult> {
-    this.assertHostedAllowed();
-    if (call.kind === "chat" && call.tools) {
-      throw new PreDispatchError("tools_not_supported", "tool calls are not wired to the Meta Model API yet");
-    }
+    // Read at call time so the guard cannot be bypassed by early construction.
+    if (this.env.LIVE_CREDITS_VERIFIED !== "true") throw new LiveCreditsNotVerifiedError();
     const baseUrl = this.env.MODEL_API_BASE_URL?.replace(/\/+$/, "");
     if (!baseUrl || !baseUrl.startsWith("https://")) {
       throw new PreDispatchError("dispatcher_not_configured", "MODEL_API_BASE_URL is missing or not https");
@@ -54,22 +35,7 @@ export class MetaDispatcher implements Dispatcher {
     const auth = { Authorization: `Bearer ${key}` };
     switch (call.kind) {
       case "chat":
-        return this.json(`${baseUrl}/chat/completions`, auth, {
-          model: call.model,
-          messages: call.messages,
-          max_completion_tokens: call.maxOutputTokens,
-          ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
-        }, (body) => ({
-          output: body?.choices?.[0]?.message?.content ?? undefined,
-          units: body?.usage
-            ? {
-                kind: "chat",
-                promptTokens: num(body.usage.prompt_tokens),
-                cachedTokens: num(body.usage.prompt_tokens_details?.cached_tokens),
-                completionTokens: num(body.usage.completion_tokens),
-              }
-            : null,
-        }));
+        return this.chat(`${baseUrl}/chat/completions`, auth, call);
 
       case "transcribe": {
         const form = new FormData();
@@ -121,6 +87,39 @@ export class MetaDispatcher implements Dispatcher {
     }
   }
 
+  /** Chat, with tool calls carried per MODEL_TOOL_MODE when the call has tools. */
+  private chat(url: string, auth: Record<string, string>, call: ChatCall): Promise<DispatchResult> {
+    const mode = call.tools ? toolMode(this.env) : null;
+    const base = {
+      model: call.model,
+      max_completion_tokens: call.maxOutputTokens,
+      ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
+    };
+    const payload =
+      mode === "json"
+        ? { ...base, messages: encodeJsonMode(call.messages, call.tools!) }
+        : mode === "native"
+          ? { ...base, ...encodeNative(call.messages, call.tools!) }
+          : { ...base, messages: call.messages };
+    return this.json(url, auth, payload, (body) => {
+      const message = body?.choices?.[0]?.message;
+      const content: string | undefined = message?.content ?? undefined;
+      const units: BillingUnits | null = body?.usage
+        ? {
+            kind: "chat",
+            promptTokens: num(body.usage.prompt_tokens),
+            cachedTokens: num(body.usage.prompt_tokens_details?.cached_tokens),
+            completionTokens: num(body.usage.completion_tokens),
+          }
+        : null;
+      if (!mode) return { output: content, units };
+      const step: DecodedStep = mode === "json" ? decodeJsonMode(content) : decodeNative(message);
+      return step.ok
+        ? { output: step.text, toolCalls: step.toolCalls, units }
+        : { output: content, protocolError: step.error, units };
+    });
+  }
+
   private json(url: string, auth: Record<string, string>, payload: unknown, parse: Parser): Promise<DispatchResult> {
     return this.send(url, { ...auth, "Content-Type": "application/json" }, JSON.stringify(payload), parse);
   }
@@ -144,12 +143,12 @@ export class MetaDispatcher implements Dispatcher {
     } catch {
       return { ok: false, status: res.status, retryable: false, units: null, errorBody: `non-JSON body: ${text.slice(0, ERROR_BODY_LIMIT)}` };
     }
-    const { output, units } = parse(parsed);
-    return { ok: true, status: res.status, retryable: false, units, output };
+    const { output, units, toolCalls, protocolError } = parse(parsed);
+    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError };
   }
 }
 
-type Parser = (body: any) => { output?: string; units: BillingUnits | null };
+type Parser = (body: any) => { output?: string; units: BillingUnits | null; toolCalls?: ToolCallRequest[]; protocolError?: string };
 
 function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;

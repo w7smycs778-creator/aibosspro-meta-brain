@@ -1,9 +1,5 @@
-// Parsing and reply text for the WhatsApp webhook. No I/O here; the route
-// verifies the signature, dedupes through the store, then sends replies after
-// responding.
-
-export const REPLY_PREFIX = "AIBOSSPRO Brain (AI assistant): I received your message. ";
-export const ECHO_LIMIT = 200;
+// Parsing for the WhatsApp webhook. No I/O here; the route verifies the
+// signature, dedupes through the store, then runs the engine after responding.
 
 export type InboundText = { id: string; from: string; text: string };
 
@@ -23,11 +19,6 @@ export function extractTextMessages(payload: unknown): InboundText[] {
     }
   }
   return out;
-}
-
-/** Echo capped at ECHO_LIMIT characters, counted by code point. */
-export function replyText(text: string): string {
-  return REPLY_PREFIX + Array.from(text).slice(0, ECHO_LIMIT).join("");
 }
 
 /** Last 4 digits of a phone number, for logs. */

@@ -95,6 +95,8 @@ export type DispatchResult = {
   units: BillingUnits | null;
   output?: string;
   toolCalls?: ToolCallRequest[];
+  /** The model answered, but not in the tool protocol; output holds the raw text. */
+  protocolError?: string;
   errorBody?: string;
 };
 
@@ -112,7 +114,6 @@ export type DenyReason =
   | "insufficient_credit"
   | "live_credits_not_verified"
   | "hosted_inference_blocked"
-  | "tools_not_supported"
   | "dispatcher_not_configured";
 
 export type AttemptRecord = {
@@ -130,6 +131,7 @@ export type GatewayResult =
       status: number;
       output?: string;
       toolCalls?: ToolCallRequest[];
+      protocolError?: string;
       errorBody?: string;
       attempts: AttemptRecord[];
       reservedNano: NanoUsd;

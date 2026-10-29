@@ -4,16 +4,20 @@
 // process and separate processes on the same file are both serialised.
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve, sep } from "node:path";
 import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, SpendUsage } from "../gateway/ledger";
 import type { NanoUsd } from "../gateway/money";
+import { StorageConfigError } from "./errors";
+import { bookingPayload } from "./payload";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
 import type {
   Booking,
   BrainVersion,
   Business,
   BusinessBrain,
+  Channel,
   Conversation,
   ConversationMode,
   ConversationState,
@@ -28,6 +32,8 @@ import type {
 } from "./types";
 
 export const LOCAL_DB_FILE = "meta-brain.sqlite";
+/** Bumped when SCHEMA changes shape; an older file is refused, not migrated. */
+const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 create table if not exists businesses (
@@ -47,12 +53,14 @@ create table if not exists brain_versions (
 create table if not exists conversations (
   id text primary key,
   business_id text not null references businesses(id) on delete cascade,
-  channel text not null check (channel in ('whatsapp', 'web')),
+  channel text not null check (channel in ('whatsapp', 'panel')),
+  external_id text not null,
   customer_ref text not null,
   mode text not null check (mode in ('AUTO', 'HUMAN', 'PAUSED')),
   state text not null check (state in ('active', 'owner_help', 'closed')),
   created_at text not null,
-  updated_at text not null
+  updated_at text not null,
+  unique (business_id, channel, external_id)
 );
 create table if not exists turns (
   seq integer primary key autoincrement,
@@ -80,6 +88,8 @@ create table if not exists bookings (
   conversation_id text references conversations(id) on delete set null,
   service_id text not null,
   customer_ref text not null,
+  customer_name text,
+  customer_contact text,
   starts_at text not null,
   status text not null check (status in ('pending_approval', 'confirmed', 'rejected', 'cancelled')),
   approval_id text references approvals(id) on delete set null,
@@ -119,21 +129,41 @@ const now = () => new Date().toISOString();
 export class LocalStore implements Storage {
   readonly backend = "local" as const;
 
-  private constructor(private readonly db: Database.Database) {}
+  private constructor(
+    private readonly db: Database.Database,
+    /** Absolute database file path; null for an in-memory store. */
+    private readonly file: string | null,
+  ) {}
 
   /** Opens (creating if needed) the store under dir. */
   static open(dir: string): LocalStore {
     mkdirSync(dir, { recursive: true });
-    const db = new Database(join(dir, LOCAL_DB_FILE));
+    const file = resolve(dir, LOCAL_DB_FILE);
+    const db = new Database(file);
     db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
     db.pragma("busy_timeout = 5000");
-    db.exec(SCHEMA);
-    return new LocalStore(db);
+    return new LocalStore(prepare(db, file), file);
+  }
+
+  /** Throwaway store; never durable. */
+  static memory(): LocalStore {
+    return new LocalStore(prepare(new Database(":memory:"), ":memory:"), null);
   }
 
   async ping(): Promise<void> {
     this.db.prepare("select 1 from model_spend_reservations limit 1").get();
+  }
+
+  async isDurable(): Promise<boolean> {
+    if (!this.file || !existsSync(this.file)) return false;
+    try {
+      accessSync(this.file, constants.W_OK);
+    } catch {
+      return false;
+    }
+    const real = realpathSync(this.file);
+    const temps = new Set([tmpdir(), "/tmp", "/private/tmp"].filter(existsSync).map((d) => realpathSync(d)));
+    return ![...temps].some((t) => real === t || real.startsWith(t + sep));
   }
 
   async close(): Promise<void> {
@@ -196,11 +226,24 @@ export class LocalStore implements Storage {
     const at = now();
     this.db
       .prepare(
-        `insert into conversations (id, business_id, channel, customer_ref, mode, state, created_at, updated_at)
-         values (?, ?, ?, ?, ?, 'active', ?, ?)`,
+        `insert into conversations (id, business_id, channel, external_id, customer_ref, mode, state, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
       )
-      .run(id, input.businessId, input.channel, input.customerRef, input.mode ?? "HUMAN", at, at);
+      .run(id, input.businessId, input.channel, input.externalId, input.customerRef, input.mode ?? "HUMAN", at, at);
     return (await this.getConversation(id))!;
+  }
+
+  async findConversation(businessId: string, channel: Channel, externalId: string): Promise<Conversation | null> {
+    const r = this.db
+      .prepare("select * from conversations where business_id = ? and channel = ? and external_id = ?")
+      .get(businessId, channel, externalId) as Row | undefined;
+    return r ? toConversation(r) : null;
+  }
+
+  async listConversations(businessId: string): Promise<Conversation[]> {
+    return (
+      this.db.prepare("select * from conversations where business_id = ? order by updated_at desc").all(businessId) as Row[]
+    ).map(toConversation);
   }
 
   async getConversation(id: string): Promise<Conversation | null> {
@@ -235,15 +278,27 @@ export class LocalStore implements Storage {
           businessId: input.businessId,
           conversationId: input.conversationId,
           kind: "booking",
-          payload: { serviceId: input.serviceId, customerRef: input.customerRef, startsAt: input.startsAt },
+          payload: bookingPayload(input),
         });
         const id = randomUUID();
         this.db
           .prepare(
-            `insert into bookings (id, business_id, conversation_id, service_id, customer_ref, starts_at, status, approval_id, created_at)
-             values (?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?)`,
+            `insert into bookings (id, business_id, conversation_id, service_id, customer_ref, customer_name, customer_contact,
+                                   starts_at, status, approval_id, created_at)
+             values (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?)`,
           )
-          .run(id, input.businessId, input.conversationId, input.serviceId, input.customerRef, input.startsAt, approval.id, now());
+          .run(
+            id,
+            input.businessId,
+            input.conversationId,
+            input.serviceId,
+            input.customerRef,
+            input.customerName ?? null,
+            input.customerContact ?? null,
+            input.startsAt,
+            approval.id,
+            now(),
+          );
         return { booking: toBooking(this.db.prepare("select * from bookings where id = ?").get(id) as Row), approval };
       })
       .immediate();
@@ -253,17 +308,25 @@ export class LocalStore implements Storage {
     return this.insertApproval(input);
   }
 
-  async decideApproval(id: string, decision: "approved" | "rejected"): Promise<PendingApproval> {
+  async getApproval(id: string): Promise<PendingApproval | null> {
+    const r = this.db.prepare("select * from approvals where id = ?").get(id) as Row | undefined;
+    return r ? toApproval(r) : null;
+  }
+
+  async decideApproval(id: string, decision: "approved" | "rejected"): Promise<{ approval: PendingApproval; changed: boolean }> {
     return this.db
       .transaction(() => {
         const res = this.db
           .prepare("update approvals set status = ?, decided_at = ? where id = ? and status = 'pending'")
           .run(decision, now(), id);
-        if (res.changes === 0) throw new Error(`approval ${id} is not pending`);
-        this.db
-          .prepare("update bookings set status = ? where approval_id = ? and status = 'pending_approval'")
-          .run(decision === "approved" ? "confirmed" : "rejected", id);
-        return toApproval(this.db.prepare("select * from approvals where id = ?").get(id) as Row);
+        const row = this.db.prepare("select * from approvals where id = ?").get(id) as Row | undefined;
+        if (!row) throw new Error(`approval ${id} not found`);
+        if (res.changes === 1) {
+          this.db
+            .prepare("update bookings set status = ? where approval_id = ? and status = 'pending_approval'")
+            .run(decision === "approved" ? "confirmed" : "rejected", id);
+        }
+        return { approval: toApproval(row), changed: res.changes === 1 };
       })
       .immediate();
   }
@@ -370,6 +433,20 @@ export class LocalStore implements Storage {
   }
 }
 
+/** Applies the schema; refuses a file written by an older schema version. */
+function prepare(db: Database.Database, file: string): Database.Database {
+  db.pragma("foreign_keys = ON");
+  const version = db.pragma("user_version", { simple: true }) as number;
+  const hasTables = db.prepare("select count(*) as n from sqlite_master where type = 'table'").get() as Row;
+  if (version !== SCHEMA_VERSION && hasTables.n > 0) {
+    db.close();
+    throw new StorageConfigError(`local store ${file} has schema v${version}, expected v${SCHEMA_VERSION}; move the file aside and reopen`);
+  }
+  db.exec(SCHEMA);
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  return db;
+}
+
 function toBrain(r: Row): BrainVersion {
   return {
     businessId: r.business_id,
@@ -386,6 +463,7 @@ function toConversation(r: Row): Conversation {
     id: r.id,
     businessId: r.business_id,
     channel: r.channel,
+    externalId: r.external_id,
     customerRef: r.customer_ref,
     mode: r.mode,
     state: r.state,
@@ -426,6 +504,8 @@ function toBooking(r: Row): Booking {
     conversationId: r.conversation_id ?? null,
     serviceId: r.service_id,
     customerRef: r.customer_ref,
+    customerName: r.customer_name ?? null,
+    customerContact: r.customer_contact ?? null,
     startsAt: r.starts_at,
     status: r.status,
     approvalId: r.approval_id ?? null,

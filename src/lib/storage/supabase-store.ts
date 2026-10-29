@@ -8,11 +8,13 @@ import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, Spend
 import type { NanoUsd } from "../gateway/money";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
 import { StorageConfigError } from "./errors";
+import { bookingPayload } from "./payload";
 import type {
   Booking,
   BrainVersion,
   Business,
   BusinessBrain,
+  Channel,
   Conversation,
   ConversationMode,
   ConversationState,
@@ -52,6 +54,15 @@ export class SupabaseStore implements Storage {
 
   async ping(): Promise<void> {
     check(await this.db.from("model_spend_reservations").select("id", { head: true }).limit(1), "ping");
+  }
+
+  async isDurable(): Promise<boolean> {
+    try {
+      await this.ping();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async close(): Promise<void> {}
@@ -117,6 +128,7 @@ export class SupabaseStore implements Storage {
           id: randomUUID(),
           business_id: input.businessId,
           channel: input.channel,
+          external_id: input.externalId,
           customer_ref: input.customerRef,
           mode: input.mode ?? "HUMAN",
           state: "active",
@@ -131,6 +143,28 @@ export class SupabaseStore implements Storage {
   async getConversation(id: string): Promise<Conversation | null> {
     const r = check(await this.db.from("conversations").select("*").eq("id", id).maybeSingle(), "getConversation");
     return r ? toConversation(r) : null;
+  }
+
+  async findConversation(businessId: string, channel: Channel, externalId: string): Promise<Conversation | null> {
+    const r = check(
+      await this.db
+        .from("conversations")
+        .select("*")
+        .eq("business_id", businessId)
+        .eq("channel", channel)
+        .eq("external_id", externalId)
+        .maybeSingle(),
+      "findConversation",
+    );
+    return r ? toConversation(r) : null;
+  }
+
+  async listConversations(businessId: string): Promise<Conversation[]> {
+    const rows = check(
+      await this.db.from("conversations").select("*").eq("business_id", businessId).order("updated_at", { ascending: false }),
+      "listConversations",
+    );
+    return (rows as Row[]).map(toConversation);
   }
 
   async updateConversation(id: string, patch: { mode?: ConversationMode; state?: ConversationState }): Promise<Conversation> {
@@ -174,7 +208,7 @@ export class SupabaseStore implements Storage {
       businessId: input.businessId,
       conversationId: input.conversationId,
       kind: "booking",
-      payload: { serviceId: input.serviceId, customerRef: input.customerRef, startsAt: input.startsAt },
+      payload: bookingPayload(input),
     });
     const res = await this.db
       .from("bookings")
@@ -184,6 +218,8 @@ export class SupabaseStore implements Storage {
         conversation_id: input.conversationId,
         service_id: input.serviceId,
         customer_ref: input.customerRef,
+        customer_name: input.customerName ?? null,
+        customer_contact: input.customerContact ?? null,
         starts_at: input.startsAt,
         status: "pending_approval",
         approval_id: approval.id,
@@ -216,7 +252,12 @@ export class SupabaseStore implements Storage {
     return toApproval(r);
   }
 
-  async decideApproval(id: string, decision: "approved" | "rejected"): Promise<PendingApproval> {
+  async getApproval(id: string): Promise<PendingApproval | null> {
+    const r = check(await this.db.from("approvals").select("*").eq("id", id).maybeSingle(), "getApproval");
+    return r ? toApproval(r) : null;
+  }
+
+  async decideApproval(id: string, decision: "approved" | "rejected"): Promise<{ approval: PendingApproval; changed: boolean }> {
     const rows = check(
       await this.db
         .from("approvals")
@@ -226,7 +267,11 @@ export class SupabaseStore implements Storage {
         .select(),
       "decideApproval",
     ) as Row[];
-    if (rows.length === 0) throw new Error(`approval ${id} is not pending`);
+    if (rows.length === 0) {
+      const current = await this.getApproval(id);
+      if (!current) throw new Error(`approval ${id} not found`);
+      return { approval: current, changed: false };
+    }
     check(
       await this.db
         .from("bookings")
@@ -235,7 +280,7 @@ export class SupabaseStore implements Storage {
         .eq("status", "pending_approval"),
       "decideApproval booking",
     );
-    return toApproval(rows[0]);
+    return { approval: toApproval(rows[0]), changed: true };
   }
 
   async listPendingApprovals(businessId: string): Promise<PendingApproval[]> {
@@ -347,6 +392,7 @@ function toConversation(r: Row): Conversation {
     id: r.id,
     businessId: r.business_id,
     channel: r.channel,
+    externalId: r.external_id,
     customerRef: r.customer_ref,
     mode: r.mode,
     state: r.state,
@@ -387,6 +433,8 @@ function toBooking(r: Row): Booking {
     conversationId: r.conversation_id ?? null,
     serviceId: r.service_id,
     customerRef: r.customer_ref,
+    customerName: r.customer_name ?? null,
+    customerContact: r.customer_contact ?? null,
     startsAt: r.starts_at,
     status: r.status,
     approvalId: r.approval_id ?? null,

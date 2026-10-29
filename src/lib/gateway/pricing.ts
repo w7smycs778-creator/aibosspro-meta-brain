@@ -23,6 +23,8 @@ export const PRICES: PriceTable = {
 
 /** Per-message framing allowance on top of content bytes. */
 const MESSAGE_OVERHEAD_TOKENS = 16;
+/** Tool-protocol instructions the dispatcher adds when tools are present. */
+const TOOL_PROTOCOL_OVERHEAD_TOKENS = 1_024;
 /** Lowest-bitrate WAV we accept: 8-bit mono 16 kHz = 16,000 bytes/s. */
 const MIN_WAV_BYTES_PER_SECOND = 16_000;
 
@@ -57,7 +59,7 @@ export function estimateMaxCost(call: ModelCall, prices: PriceTable = PRICES): N
         inputTokens += messageBytes(m) + MESSAGE_OVERHEAD_TOKENS;
       }
       if (call.tools?.length) {
-        inputTokens += utf8.encode(JSON.stringify(call.tools)).length + MESSAGE_OVERHEAD_TOKENS;
+        inputTokens += utf8.encode(JSON.stringify(call.tools)).length + TOOL_PROTOCOL_OVERHEAD_TOKENS;
       }
       if (call.jsonSchema) {
         inputTokens += utf8.encode(JSON.stringify(call.jsonSchema)).length + MESSAGE_OVERHEAD_TOKENS;

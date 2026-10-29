@@ -195,12 +195,12 @@ describe("live-credit guard", () => {
     });
   }
 
-  it("lets the real dispatcher through with LIVE_CREDITS_VERIFIED=true and a Supabase ledger", async () => {
+  it("lets the real dispatcher through with LIVE_CREDITS_VERIFIED=true, a cap and a durable ledger", async () => {
     const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ created: 1, data: [{ b64_json: "AAAA" }] }), { status: 200 }));
     const ledger = storeLedger(limits());
-    const env = { ...baseEnv, LIVE_CREDITS_VERIFIED: "true", STORAGE_BACKEND: "supabase" };
-    // Stand-in for a reachable Supabase ledger; the parsing path is what is under test.
-    const supabaseProbe = { backend: "supabase" as const, ping: async () => {} };
+    const env = { ...baseEnv, LIVE_CREDITS_VERIFIED: "true", STORAGE_BACKEND: "supabase", MODEL_SPEND_HARD_CAP_USD: "130" };
+    // Stand-in for a durable, reachable Supabase ledger; the parsing path is what is under test.
+    const supabaseProbe = { backend: "supabase" as const, ping: async () => {}, isDurable: async () => true };
     const gw = new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch, supabaseProbe) });
     const r = await gw.call(image());
     expect(r.outcome).toBe("ok");
@@ -211,7 +211,7 @@ describe("live-credit guard", () => {
 });
 
 describe("gateway isolation", () => {
-  it("only meta-dispatcher.ts touches the Meta API, its key or fetch", () => {
+  it("only meta-dispatcher.ts touches the Meta API, its key or server-side fetch", () => {
     const root = join(__dirname, "..", "..");
     const allowed = new Set(["lib/gateway/meta-dispatcher.ts"]);
     const offenders: string[] = [];
@@ -226,7 +226,9 @@ describe("gateway isolation", () => {
         const rel = relative(root, p);
         if (allowed.has(rel)) continue;
         const src = readFileSync(p, "utf8");
-        if (/api\.meta\.ai|MODEL_API_KEY|MODEL_API_BASE_URL|\bfetch\(/.test(src)) offenders.push(rel);
+        // Browser components call this app's own routes with fetch; they still may not name the Meta API or its key.
+        const browserOnly = /^["']use client["']/.test(src);
+        if (/api\.meta\.ai|MODEL_API_KEY|MODEL_API_BASE_URL/.test(src) || (!browserOnly && /\bfetch\(/.test(src))) offenders.push(rel);
       }
     };
     walk(root);

@@ -10,7 +10,10 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:local": "STORAGE_BACKEND=local next dev",
+    "store:reset": "tsx --env-file=.env scripts/reset-store.ts",
+    "mock:run": "tsx scripts/mock-run.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
@@ -20,10 +23,13 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"

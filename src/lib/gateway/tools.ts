@@ -8,16 +8,22 @@ export type ToolContext = {
   businessId: string;
   conversationId: string;
   customerRef: string;
+  now: () => Date;
 };
 
 export type ToolSpec = ToolDefinition & {
-  /** read: looks things up. write: creates a record (always owner-gated). */
-  access: "read" | "write";
+  /**
+   * read: looks things up. write: creates a record (always owner-gated).
+   * escalate: hands the conversation to the owner.
+   */
+  access: "read" | "write" | "escalate";
+  /** Running it ends the turn in owner help. */
+  endsTurn?: boolean;
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 };
 
 /**
- * PAUSED or waiting on the owner: no tools. HUMAN: read-only tools.
+ * PAUSED or waiting on the owner: no tools. HUMAN: read and escalate tools.
  * AUTO: every registered tool; write tools still only create pending records.
  */
 export function permittedToolNames(conversation: Conversation, registry: readonly ToolSpec[]): string[] {
@@ -26,7 +32,7 @@ export function permittedToolNames(conversation: Conversation, registry: readonl
     case "PAUSED":
       return [];
     case "HUMAN":
-      return registry.filter((t) => t.access === "read").map((t) => t.name);
+      return registry.filter((t) => t.access !== "write").map((t) => t.name);
     case "AUTO":
       return registry.map((t) => t.name);
   }
@@ -60,47 +66,3 @@ export function argumentError(schema: JsonSchemaObject, args: unknown): string |
   }
   return null;
 }
-
-export const listServicesTool: ToolSpec = {
-  name: "list_services",
-  description: "List the business's services with duration and price, from the owner-approved brain.",
-  parameters: { type: "object", properties: {}, additionalProperties: false },
-  access: "read",
-  async execute(_args, ctx) {
-    const brain = await ctx.store.getBrain(ctx.businessId, { approvedOnly: true });
-    if (!brain) throw new Error("no approved brain for this business");
-    return { currency: brain.brain.currency, services: brain.brain.services };
-  },
-};
-
-export const requestBookingTool: ToolSpec = {
-  name: "request_booking",
-  description: "Ask the owner to approve a booking. Nothing is confirmed until the owner approves.",
-  parameters: {
-    type: "object",
-    properties: {
-      service_id: { type: "string", description: "Service id from list_services." },
-      starts_at: { type: "string", description: "Start time, ISO 8601 with offset." },
-    },
-    required: ["service_id", "starts_at"],
-    additionalProperties: false,
-  },
-  access: "write",
-  async execute(args, ctx) {
-    const brain = await ctx.store.getBrain(ctx.businessId, { approvedOnly: true });
-    const serviceId = args.service_id as string;
-    if (!brain?.brain.services.some((s) => s.id === serviceId)) throw new Error(`unknown service "${serviceId}"`);
-    const startsAt = new Date(args.starts_at as string);
-    if (Number.isNaN(startsAt.getTime())) throw new Error("starts_at is not a valid time");
-    const { booking, approval } = await ctx.store.requestBooking({
-      businessId: ctx.businessId,
-      conversationId: ctx.conversationId,
-      serviceId,
-      customerRef: ctx.customerRef,
-      startsAt: startsAt.toISOString(),
-    });
-    return { bookingId: booking.id, approvalId: approval.id, status: booking.status };
-  },
-};
-
-export const DEFAULT_TOOLS: readonly ToolSpec[] = [listServicesTool, requestBookingTool];

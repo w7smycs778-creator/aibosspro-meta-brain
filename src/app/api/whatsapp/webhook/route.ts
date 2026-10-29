@@ -1,8 +1,10 @@
 import { after } from "next/server";
+import { handleInbound } from "@/lib/engine/conversation-service";
+import { SEED_BUSINESS_ID } from "@/lib/storage/seed";
 import { sendText } from "@/lib/whatsapp/send";
 import { safeEqual, verifySignature } from "@/lib/whatsapp/signature";
 import { getStore } from "@/lib/storage";
-import { extractTextMessages, last4, replyText, type InboundText } from "@/lib/whatsapp/webhook";
+import { extractTextMessages, last4, type InboundText } from "@/lib/whatsapp/webhook";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +21,10 @@ export function GET(req: Request): Response {
   return new Response("Forbidden", { status: 403 });
 }
 
-/** Signed event delivery. Responds first; replies are sent after the response. */
+/** One WhatsApp number serves one business; the seeded demo business until onboarding exists. */
+const businessId = () => process.env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID;
+
+/** Signed event delivery. Responds first; the engine runs and replies after the response. */
 export async function POST(req: Request): Promise<Response> {
   const raw = Buffer.from(await req.arrayBuffer());
   if (!verifySignature(raw, req.headers.get("x-hub-signature-256"), process.env.META_APP_SECRET)) {
@@ -52,7 +57,17 @@ export async function POST(req: Request): Promise<Response> {
       for (const m of fresh) {
         console.log("whatsapp inbound", { id: m.id, from4: last4(m.from) });
         try {
-          const res = await sendText(m.from, replyText(m.text));
+          const result = await handleInbound({
+            businessId: businessId(),
+            channel: "whatsapp",
+            externalConversationId: m.from,
+            senderId: m.from,
+            text: m.text,
+            externalEventId: m.id,
+          });
+          console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome });
+          if (!result.replyText) continue;
+          const res = await sendText(m.from, result.replyText);
           console.log("whatsapp reply", { id: m.id, from4: last4(m.from), status: res.status });
         } catch (err) {
           console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name });

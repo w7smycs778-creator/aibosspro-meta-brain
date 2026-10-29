@@ -20,16 +20,16 @@ export {
 export { usdToNano, nanoToUsd, formatUsd } from "./money";
 export { estimateMaxCost, actualCost, PRICES } from "./pricing";
 export { runToolLoop } from "./tool-loop";
-export type { ToolLoopInput, ToolLoopResult, OwnerHelpReason } from "./tool-loop";
-export { DEFAULT_TOOLS, listServicesTool, requestBookingTool, permittedToolNames } from "./tools";
+export type { ToolLoopInput, ToolLoopResult, OwnerHelpReason, ProposedStep, StepVerdict } from "./tool-loop";
+export { permittedToolNames } from "./tools";
+export { assertLiveInferenceAllowed } from "./live-gate";
 export type { ToolSpec, ToolContext } from "./tools";
 export type * from "./types";
 
 /**
  * Gateway wired to the real Meta Model API, with the spend ledger in store.
- * The dispatcher stays blocked unless, at call time, LIVE_CREDITS_VERIFIED=true,
- * STORAGE_BACKEND=supabase, store is the Supabase store and its ledger table
- * answers.
+ * The dispatcher stays blocked unless assertLiveInferenceAllowed passes at
+ * call time (src/lib/gateway/live-gate.ts).
  */
 export function createLiveGateway(opts: { store: Storage; run?: GatewayOptions["run"]; env?: Env }): SpendGateway {
   const env = opts.env ?? process.env;

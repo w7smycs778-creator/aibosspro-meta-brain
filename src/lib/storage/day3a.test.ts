@@ -1,5 +1,6 @@
-// Day 3A: durable ledger, durable dedupe, tool loop, hosted-inference gate.
+// Day 3A/3B1: durable ledger, durable dedupe, tool loop, live-inference gate.
 // Mock model client only; no network.
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,9 @@ import { MockModelClient } from "../gateway/mock-client";
 import { usdToNano } from "../gateway/money";
 import type { PriceTable } from "../gateway/pricing";
 import { runToolLoop } from "../gateway/tool-loop";
-import { DEFAULT_TOOLS } from "../gateway/tools";
+import { assertLiveInferenceAllowed } from "../gateway/live-gate";
+import { ENGINE_TOOLS } from "../engine/tools";
+import { DEMO_CLOCK, DEMO_DATE } from "../engine/demo-script";
 import { assertStartupConfig } from "../startup";
 import { createStore, resolveBackend, SEED_BUSINESS_ID } from ".";
 import { LocalStore } from "./local-store";
@@ -106,58 +109,62 @@ describe("tool-call loop", () => {
   async function setup(mode: "AUTO" | "HUMAN") {
     const store = openStore(tempDir());
     const { businessId } = await store.reset();
-    const conversation = await store.createConversation({ businessId, channel: "whatsapp", customerRef: "cust_synthetic_1", mode });
-    const turn = await store.appendTurn({ conversationId: conversation.id, role: "customer", content: "Cut + beard Tuesday 10am?" });
+    const conversation = await store.createConversation({
+      businessId, channel: "whatsapp", externalId: "15550000001", customerRef: "cust_synthetic_1", mode,
+    });
+    const turn = await store.appendTurn({ conversationId: conversation.id, role: "customer", content: "Cut + beard Thursday 10:00?" });
     return { store, conversation, turn };
   }
+  const loop = (store: LocalStore, gateway: SpendGateway, conversationId: string, turnId: string, extra = {}) =>
+    runToolLoop({
+      gateway, store, registry: ENGINE_TOOLS, conversationId, turnId, now: () => DEMO_CLOCK,
+      model: MOCK_MODEL, messages: [{ role: "user", content: "synthetic" }], maxOutputTokens: 100, ...extra,
+    });
 
-  it("runs a permitted tool, checkpoints it, and reaches a pending booking", async () => {
+  it("runs permitted tools, checkpoints them, and reaches a pending booking", async () => {
     const { store, conversation, turn } = await setup("AUTO");
     const { client, gateway } = mockGateway(store, 10, [
       { toolCall: { name: "list_services", arguments: {} } },
-      { toolCall: { name: "request_booking", arguments: { service_id: "cut_and_beard", starts_at: "2026-11-03T10:00:00-05:00" } } },
-      { text: "Requested. The owner will confirm." },
+      { toolCall: { name: "check_availability", arguments: { date: DEMO_DATE, service: "cut_and_beard" } } },
+      { toolCall: { name: "request_booking", arguments: { service: "cut_and_beard", slot: `${DEMO_DATE}T10:00`, customer_name: "Sam", customer_contact: "sam@example.test" } } },
+      { text: "Requested. The owner will approve it." },
     ]);
 
-    const r = await runToolLoop({
-      gateway, store, registry: DEFAULT_TOOLS, conversationId: conversation.id, turnId: turn.id,
-      model: MOCK_MODEL, messages: [{ role: "user", content: turn.content }], maxOutputTokens: 100,
-    });
+    const r = await loop(store, gateway, conversation.id, turn.id);
 
-    expect(r).toEqual({ status: "final", text: "Requested. The owner will confirm.", iterations: 3 });
-    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(["list_services", "request_booking"]);
-    const kinds = (await store.listTurns(conversation.id)).map((t) => t.checkpoint?.kind ?? t.role);
-    expect(kinds).toEqual(["customer", "tool_call", "tool_result", "tool_call", "tool_result", "final"]);
-    const results = (await store.listTurns(conversation.id)).filter((t) => t.checkpoint?.kind === "tool_result");
-    expect(results.every((t) => (t.checkpoint!.result as { ok: boolean }).ok)).toBe(true);
+    expect(r).toEqual({ status: "final", text: "Requested. The owner will approve it.", iterations: 4 });
+    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(ENGINE_TOOLS.map((t) => t.name));
+    const turns = await store.listTurns(conversation.id);
+    expect(turns.map((t) => t.checkpoint?.kind ?? t.role)).toEqual([
+      "customer", "tool_call", "tool_result", "tool_call", "tool_result", "tool_call", "tool_result", "final",
+    ]);
+    expect(turns.filter((t) => t.checkpoint?.kind === "tool_result").every((t) => (t.checkpoint!.result as { ok: boolean }).ok)).toBe(true);
 
     const [booking] = await store.listBookings(conversation.businessId);
-    expect(booking).toMatchObject({ serviceId: "cut_and_beard", status: "pending_approval", conversationId: conversation.id });
+    expect(booking).toMatchObject({ serviceId: "cut_and_beard", status: "pending_approval", conversationId: conversation.id, customerName: "Sam" });
     const [approval] = await store.listPendingApprovals(conversation.businessId);
     expect(approval).toMatchObject({ id: booking.approvalId, kind: "booking", status: "pending" });
     expect((await store.getConversation(conversation.id))!.state).toBe("active");
     // Every model call in the loop is on the ledger under the customer turn.
-    expect((await store.listSpend()).map((e) => e.turnId)).toEqual([turn.id, turn.id, turn.id]);
+    expect((await store.listSpend()).map((e) => e.turnId)).toEqual([turn.id, turn.id, turn.id, turn.id]);
   });
 
   it("refuses a non-permitted tool, logs it, and ends in owner help", async () => {
     const { store, conversation, turn } = await setup("HUMAN");
     const { client, gateway } = mockGateway(store, 10, [
-      { toolCall: { name: "request_booking", arguments: { service_id: "classic_cut", starts_at: "2026-11-03T10:00:00-05:00" } } },
+      { toolCall: { name: "request_booking", arguments: { service: "classic_cut", slot: `${DEMO_DATE}T10:00`, customer_name: "Sam", customer_contact: "x" } } },
       { text: "never reached" },
     ]);
 
-    const r = await runToolLoop({
-      gateway, store, registry: DEFAULT_TOOLS, conversationId: conversation.id, turnId: turn.id,
-      model: MOCK_MODEL, messages: [{ role: "user", content: turn.content }], maxOutputTokens: 100,
-    });
+    const r = await loop(store, gateway, conversation.id, turn.id);
 
     expect(r).toMatchObject({ status: "owner_help", reason: "tool_not_permitted", iterations: 1 });
     expect(client.calls).toHaveLength(1);
-    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(["list_services"]);
+    const readOnly = ["list_services", "get_hours", "check_availability", "request_owner_help"];
+    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(readOnly);
     const turns = await store.listTurns(conversation.id);
     const refused = turns.find((t) => t.checkpoint?.kind === "tool_refused");
-    expect(refused?.checkpoint).toMatchObject({ reason: "not_permitted", permitted: ["list_services"], toolCall: { name: "request_booking" } });
+    expect(refused?.checkpoint).toMatchObject({ reason: "not_permitted", permitted: readOnly, toolCall: { name: "request_booking" } });
     expect(turns.at(-1)?.checkpoint).toMatchObject({ kind: "owner_help", reason: "tool_not_permitted" });
     expect((await store.getConversation(conversation.id))!.state).toBe("owner_help");
     expect(await store.listBookings(conversation.businessId)).toEqual([]);
@@ -167,16 +174,22 @@ describe("tool-call loop", () => {
     const { store, conversation, turn } = await setup("AUTO");
     const loopStep = { toolCall: { name: "list_services", arguments: {} } };
     const { client, gateway } = mockGateway(store, 10, Array.from({ length: 10 }, () => loopStep));
-    const r = await runToolLoop({
-      gateway, store, registry: DEFAULT_TOOLS, conversationId: conversation.id, turnId: turn.id,
-      model: MOCK_MODEL, messages: [{ role: "user", content: turn.content }], maxOutputTokens: 100, maxIterations: 2,
-    });
+    const r = await loop(store, gateway, conversation.id, turn.id, { maxIterations: 2 });
     expect(r).toMatchObject({ status: "owner_help", reason: "max_iterations" });
     expect(client.calls).toHaveLength(2);
   });
+
+  it("retries invalid model output once, then hands to the owner; each retry is a ledger row", async () => {
+    const { store, conversation, turn } = await setup("AUTO");
+    const { gateway } = mockGateway(store, 10, [{ raw: "Sure! Here you go." }, { raw: '{"type":"final"}' }]);
+    const r = await loop(store, gateway, conversation.id, turn.id);
+    expect(r).toMatchObject({ status: "owner_help", reason: "invalid_model_output", iterations: 2 });
+    expect((await store.listTurns(conversation.id)).filter((t) => t.checkpoint?.kind === "invalid_output")).toHaveLength(2);
+    expect(await store.listSpend()).toHaveLength(2);
+  });
 });
 
-describe("hosted inference gate", () => {
+describe("live inference gate", () => {
   const env = {
     MODEL_API_BASE_URL: "https://api.meta.ai/v1",
     MODEL_API_KEY: "test-placeholder",
@@ -185,42 +198,60 @@ describe("hosted inference gate", () => {
     LIVE_CREDITS_VERIFIED: "true",
   };
   const image = { kind: "image" as const, model: "muse-image-1.0", prompt: "synthetic mug", n: 1 };
+  const okImage = () => new Response(JSON.stringify({ data: [{ b64_json: "AAAA" }] }), { status: 200 });
 
-  it("STORAGE_BACKEND=local with LIVE_CREDITS_VERIFIED=true is still refused before any network call", async () => {
+  /** A durable local store: a real file outside temp directories (./data is gitignored). */
+  function durableStore(): LocalStore {
+    const d = join(process.cwd(), "data", `.gate-test-${randomUUID()}`);
+    dirs.push(d);
+    return openStore(d);
+  }
+
+  it("local + verified + durable file: allowed (stubbed fetch, no network)", async () => {
+    const fetchSpy = vi.fn(async () => okImage());
+    vi.stubGlobal("fetch", fetchSpy);
+    const store = durableStore();
+    expect(await store.isDurable()).toBe(true);
+    const r = await createLiveGateway({ store, env: { ...env, STORAGE_BACKEND: "local" } }).call(image);
+    expect(r.outcome).toBe("ok");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(await store.listSpend()).toHaveLength(1);
+  });
+
+  it("VERCEL=1 + local: refused before any network call", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    const store = openStore(tempDir());
-    const gw = createLiveGateway({ store, env: { ...env, STORAGE_BACKEND: "local" } });
-    const r = await gw.call(image);
+    const store = durableStore();
+    const r = await createLiveGateway({ store, env: { ...env, STORAGE_BACKEND: "local", VERCEL: "1" } }).call(image);
     expect(r).toMatchObject({ outcome: "denied", reason: "hosted_inference_blocked" });
-    expect(r.outcome === "denied" && r.detail).toMatch(/STORAGE_BACKEND/);
+    expect(r.outcome === "denied" && r.detail).toMatch(/hosted deploy requires STORAGE_BACKEND=supabase/);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(await store.listSpend()).toEqual([]);
   });
 
-  it("refuses when the env says supabase but the ledger store is local", async () => {
+  it("LIVE_CREDITS_VERIFIED unset: refused", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    const store = openStore(tempDir());
-    const r = await createLiveGateway({ store, env: { ...env, STORAGE_BACKEND: "supabase" } }).call(image);
-    expect(r).toMatchObject({ outcome: "denied", reason: "hosted_inference_blocked" });
+    const { LIVE_CREDITS_VERIFIED: _unset, ...noFlag } = env;
+    const r = await createLiveGateway({ store: durableStore(), env: noFlag }).call(image);
+    expect(r).toMatchObject({ outcome: "denied", reason: "live_credits_not_verified" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("refuses when the Supabase ledger table is unreachable", async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    const local = openStore(tempDir());
-    const unreachable = Object.assign(Object.create(local), {
+  it("non-durable stores, a missing cap and an unreachable hosted ledger are refused", async () => {
+    await expect(assertLiveInferenceAllowed(env, openStore(tempDir()))).rejects.toThrow(/not durable/);
+    await expect(assertLiveInferenceAllowed(env, LocalStore.memory())).rejects.toThrow(/not durable/);
+    const { MODEL_SPEND_HARD_CAP_USD: _cap, ...noCap } = env;
+    await expect(assertLiveInferenceAllowed(noCap, durableStore())).rejects.toThrow(/MODEL_SPEND_HARD_CAP_USD/);
+    await expect(assertLiveInferenceAllowed({ ...env, MODEL_SPEND_HARD_CAP_USD: "131" }, durableStore())).rejects.toThrow(/ceiling/);
+    const unreachable = {
       backend: "supabase" as const,
+      isDurable: async () => true,
       ping: async () => {
         throw new Error("relation does not exist");
       },
-    });
-    const r = await createLiveGateway({ store: unreachable, env: { ...env, STORAGE_BACKEND: "supabase" } }).call(image);
-    expect(r).toMatchObject({ outcome: "denied", reason: "hosted_inference_blocked" });
-    expect(r.outcome === "denied" && r.detail).toMatch(/unreachable/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    };
+    await expect(assertLiveInferenceAllowed({ ...env, VERCEL: "1", STORAGE_BACKEND: "supabase" }, unreachable)).rejects.toThrow(/unreachable/);
   });
 });
 
@@ -245,7 +276,7 @@ describe("storage factory and startup", () => {
   it("reset wipes business data, reseeds one approved brain, keeps ledger and dedupe", async () => {
     const store = openStore(tempDir());
     await store.reset();
-    const c = await store.createConversation({ businessId: SEED_BUSINESS_ID, channel: "web", customerRef: "cust_synthetic_2" });
+    const c = await store.createConversation({ businessId: SEED_BUSINESS_ID, channel: "panel", externalId: "panel-s2", customerRef: "cust_synthetic_2" });
     await store.claimEvent("whatsapp", "wamid.keep");
     const { gateway } = mockGateway(store, 10, [{ text: "x" }]);
     await gateway.call(chat("t-reset"));

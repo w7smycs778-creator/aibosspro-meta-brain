@@ -41,12 +41,14 @@ export type BrainVersion = {
 
 export type ConversationMode = "AUTO" | "HUMAN" | "PAUSED";
 export type ConversationState = "active" | "owner_help" | "closed";
-export type Channel = "whatsapp" | "web";
+export type Channel = "whatsapp" | "panel";
 
 export type Conversation = {
   id: string;
   businessId: string;
   channel: Channel;
+  /** Channel-side conversation key: WhatsApp sender id, or the panel session id. */
+  externalId: string;
   customerRef: string;
   mode: ConversationMode;
   state: ConversationState;
@@ -92,6 +94,8 @@ export type Booking = {
   conversationId: string | null;
   serviceId: string;
   customerRef: string;
+  customerName: string | null;
+  customerContact: string | null;
   startsAt: string;
   status: BookingStatus;
   approvalId: string | null;
@@ -117,6 +121,7 @@ export type SpendEntry = {
 export type NewConversation = {
   businessId: string;
   channel: Channel;
+  externalId: string;
   customerRef: string;
   /** Defaults to HUMAN: the AI acts only after the owner switches to AUTO. */
   mode?: ConversationMode;
@@ -134,6 +139,8 @@ export type NewBookingRequest = {
   conversationId: string | null;
   serviceId: string;
   customerRef: string;
+  customerName?: string | null;
+  customerContact?: string | null;
   startsAt: string;
 };
 
@@ -148,6 +155,11 @@ export interface Storage extends SpendLedgerStore {
   readonly backend: StorageBackend;
   /** Throws unless the store, including the spend ledger table, is reachable. */
   ping(): Promise<void>;
+  /**
+   * True only when spend rows survive a restart: LocalStore on a writable file
+   * outside temp directories, SupabaseStore with its ledger table reachable.
+   */
+  isDurable(): Promise<boolean>;
   close(): Promise<void>;
   /**
    * Wipes every business with its brains, conversations, turns, approvals and
@@ -166,6 +178,8 @@ export interface Storage extends SpendLedgerStore {
 
   createConversation(input: NewConversation): Promise<Conversation>;
   getConversation(id: string): Promise<Conversation | null>;
+  findConversation(businessId: string, channel: Channel, externalId: string): Promise<Conversation | null>;
+  listConversations(businessId: string): Promise<Conversation[]>;
   updateConversation(id: string, patch: { mode?: ConversationMode; state?: ConversationState }): Promise<Conversation>;
   appendTurn(input: NewTurn): Promise<Turn>;
   listTurns(conversationId: string): Promise<Turn[]>;
@@ -173,8 +187,12 @@ export interface Storage extends SpendLedgerStore {
   /** Creates a pending booking and the owner approval that gates it. */
   requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval }>;
   createApproval(input: NewApproval): Promise<PendingApproval>;
-  /** Decides a pending approval; a linked booking becomes confirmed or rejected. */
-  decideApproval(id: string, decision: "approved" | "rejected"): Promise<PendingApproval>;
+  getApproval(id: string): Promise<PendingApproval | null>;
+  /**
+   * Decides a pending approval; a linked booking becomes confirmed or rejected.
+   * An approval that is already decided is left as is (changed: false).
+   */
+  decideApproval(id: string, decision: "approved" | "rejected"): Promise<{ approval: PendingApproval; changed: boolean }>;
   listPendingApprovals(businessId: string): Promise<PendingApproval[]>;
   listBookings(businessId: string): Promise<Booking[]>;
 
