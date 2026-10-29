@@ -32,8 +32,18 @@ import type {
 } from "./types";
 
 export const LOCAL_DB_FILE = "meta-brain.sqlite";
-/** Bumped when SCHEMA changes shape; an older file is refused, not migrated. */
-const SCHEMA_VERSION = 2;
+/**
+ * Bumped when SCHEMA changes shape. v2 files are migrated in place (columns
+ * added, rows kept); anything older is refused.
+ */
+const SCHEMA_VERSION = 3;
+
+/** Ledger columns added in v3, applied to v2 files by ALTER TABLE. */
+const V3_LEDGER_COLUMNS: Array<[name: string, ddl: string]> = [
+  ["finish_reason", "finish_reason text"],
+  ["reasoning_tokens", "reasoning_tokens integer check (reasoning_tokens >= 0)"],
+  ["usage_raw", "usage_raw text"],
+];
 
 const SCHEMA = `
 create table if not exists businesses (
@@ -107,7 +117,10 @@ create table if not exists model_spend_reservations (
   reserved_nano integer not null check (reserved_nano > 0),
   settled_nano integer check (settled_nano >= 0),
   state text not null check (state in ('reserved', 'settled', 'released')),
-  closed_at text
+  closed_at text,
+  finish_reason text,
+  reasoning_tokens integer check (reasoning_tokens >= 0),
+  usage_raw text
 );
 create index if not exists model_spend_reservations_run_idx on model_spend_reservations (run_id, state);
 create table if not exists processed_events (
@@ -375,10 +388,20 @@ export class LocalStore implements Storage {
     const res = this.db
       .prepare(
         `update model_spend_reservations
-            set state = 'settled', settled_nano = ?, tokens_in = ?, tokens_out = ?, closed_at = ?
+            set state = 'settled', settled_nano = ?, tokens_in = ?, tokens_out = ?, closed_at = ?,
+                finish_reason = ?, reasoning_tokens = ?, usage_raw = ?
           where id = ? and state = 'reserved'`,
       )
-      .run(actualNano, usage.tokensIn, usage.tokensOut, now(), reservationId);
+      .run(
+        actualNano,
+        usage.tokensIn,
+        usage.tokensOut,
+        now(),
+        usage.finishReason ?? null,
+        usage.reasoningTokens ?? null,
+        usage.usageRaw ?? null,
+        reservationId,
+      );
     if (res.changes === 0) throw new Error(`reservation ${reservationId} is not open`);
   }
 
@@ -433,18 +456,33 @@ export class LocalStore implements Storage {
   }
 }
 
-/** Applies the schema; refuses a file written by an older schema version. */
+/** Applies the schema, migrating a v2 file in place; refuses any other older version. */
 function prepare(db: Database.Database, file: string): Database.Database {
   db.pragma("foreign_keys = ON");
   const version = db.pragma("user_version", { simple: true }) as number;
-  const hasTables = db.prepare("select count(*) as n from sqlite_master where type = 'table'").get() as Row;
-  if (version !== SCHEMA_VERSION && hasTables.n > 0) {
+  const hasTables = (db.prepare("select count(*) as n from sqlite_master where type = 'table'").get() as Row).n > 0;
+  if (hasTables && version !== SCHEMA_VERSION && version !== 2) {
     db.close();
-    throw new StorageConfigError(`local store ${file} has schema v${version}, expected v${SCHEMA_VERSION}; move the file aside and reopen`);
+    throw new StorageConfigError(`local store ${file} has schema v${version}, expected v2 or v${SCHEMA_VERSION}; move the file aside and reopen`);
   }
-  db.exec(SCHEMA);
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  db.transaction(() => {
+    db.exec(SCHEMA);
+    migrateV2ToV3(db);
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  }).immediate();
   return db;
+}
+
+/** Adds the v3 ledger columns that are missing; rows are untouched. Safe to run repeatedly. */
+export function migrateV2ToV3(db: Database.Database): string[] {
+  const have = new Set((db.prepare("pragma table_info(model_spend_reservations)").all() as Row[]).map((c) => c.name));
+  const added: string[] = [];
+  for (const [name, ddl] of V3_LEDGER_COLUMNS) {
+    if (have.has(name)) continue;
+    db.exec(`alter table model_spend_reservations add column ${ddl}`);
+    added.push(name);
+  }
+  return added;
 }
 
 function toBrain(r: Row): BrainVersion {
@@ -526,5 +564,8 @@ function toSpend(r: Row): SpendEntry {
     reservedNano: r.reserved_nano,
     settledNano: r.settled_nano ?? null,
     state: r.state,
+    finishReason: r.finish_reason ?? null,
+    reasoningTokens: r.reasoning_tokens ?? null,
+    usageRaw: r.usage_raw ?? null,
   };
 }

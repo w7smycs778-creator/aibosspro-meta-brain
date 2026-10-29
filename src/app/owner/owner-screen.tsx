@@ -232,7 +232,7 @@ function describe(t: Turn): string {
       return `REFUSED ${cp.toolCall?.name} (permitted: ${(cp.permitted ?? []).join(", ")})`;
     case "verifier":
       return `verifier ${cp.target}: ${cp.pass ? "PASS" : "BLOCK"} ${(cp.checks ?? [])
-        .map((c: any) => `[${c.pass ? "ok" : "x"} ${c.rule} "${c.claim}"${c.detail ? `: ${c.detail}` : ""}]`)
+        .map((c: any) => `[${c.inconclusive ? "?" : c.pass ? "ok" : "x"} ${c.rule} "${c.claim}"${c.detail ? `: ${c.detail}` : ""}]`)
         .join(" ")}`;
     case "invalid_output":
       return `invalid model output: ${cp.error}`;

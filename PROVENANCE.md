@@ -97,6 +97,8 @@ Branch `day3a-storage`. No model was called: the tests and the scripted demo use
   - Ledger: 5 rows, $0.016353 settled in `./data`; the same total read back after stopping the server and reopening the store.
 - Day 3 binding gate NOT MET: the live request did not reach a pending booking (model output stopped before the JSON tool call at the token limit).
 
+- 2026-10-29 Day 3B1 progress: finish_reason persisted, verifier price-binding fixed, candidate text stored. Gate pending: tool mode selection.
+
 ## Third-party
 
 ## Day 2 close — 2026-10-28 (channel live)

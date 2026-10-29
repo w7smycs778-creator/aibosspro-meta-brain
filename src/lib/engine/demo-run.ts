@@ -46,7 +46,7 @@ export function traceLines(turns: Turn[]): string[] {
         }`;
       case "verifier":
         return `  verifier[${c.target}] ${c.pass ? "PASS" : "BLOCK"} ${c.checks
-          .map((k: any) => `{${k.rule} "${k.claim}" ${k.pass ? "ok" : `FAIL: ${k.detail}`}}`)
+          .map((k: any) => `{${k.rule} "${k.claim}" ${k.inconclusive ? "inconclusive" : k.pass ? "ok" : `FAIL: ${k.detail}`}}`)
           .join(" ")}`;
       case "invalid_output":
         return `  invalid output: ${c.error}`;

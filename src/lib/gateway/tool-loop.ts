@@ -6,10 +6,13 @@ import type { Checkpoint, Storage } from "../storage/types";
 import { loadMaxToolIterations } from "./config";
 import type { SpendGateway } from "./gateway";
 import { argumentError, permittedToolNames, toDefinition, type ToolContext, type ToolSpec } from "./tools";
-import type { ChatMessage, ToolCallRequest, ToolCallResult } from "./types";
+import type { ChatCall, ChatMessage, ToolCallRequest, ToolCallResult } from "./types";
 
 /** What a verifier returns for one proposed step. */
-export type StepVerdict = { pass: boolean; checks: Array<{ rule: string; claim: string; pass: boolean; detail?: string }> };
+export type StepVerdict = {
+  pass: boolean;
+  checks: Array<{ rule: string; claim: string; pass: boolean; detail?: string; inconclusive?: boolean }>;
+};
 export type ProposedStep = { kind: "final"; text: string } | { kind: "tool_call"; call: ToolCallRequest };
 
 export type ToolLoopInput = {
@@ -22,6 +25,7 @@ export type ToolLoopInput = {
   model: string;
   messages: ChatMessage[];
   maxOutputTokens: number;
+  reasoningEffort?: ChatCall["reasoningEffort"];
   /** Defaults to TOOL_LOOP_MAX_ITERATIONS, else 6. */
   maxIterations?: number;
   /** Deterministic check run before a final message or tool call is accepted. */
@@ -93,12 +97,16 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
     if (!input.verify) return "pass";
     const verdict = await input.verify(step);
     const failed = verdict.checks.filter((c) => !c.pass);
+    const review = verdict.pass ? verdict.checks.filter((c) => c.inconclusive) : [];
     await checkpoint("system", verdict.pass ? "Verifier passed." : `Verifier blocked: ${failed.map((c) => c.claim).join("; ")}`, {
       kind: "verifier",
       iteration,
       target: step.kind === "final" ? "final" : step.call.name,
+      // The exact candidate checked, pass or fail, so any verdict can be audited against it.
+      candidate: step.kind === "final" ? { text: step.text } : { tool: step.call.name, args: step.call.arguments },
       pass: verdict.pass,
       checks: verdict.checks,
+      ...(review.length && { ownerReview: review }),
     });
     if (verdict.pass) return "pass";
     const claims = failed.map((c) => `${c.claim} (${c.detail ?? c.rule})`).join("; ");
@@ -128,6 +136,7 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
       model: input.model,
       messages,
       maxOutputTokens: input.maxOutputTokens,
+      ...(input.reasoningEffort && { reasoningEffort: input.reasoningEffort }),
       ...(tools.length && { tools: tools.map(toDefinition) }),
       round: iteration,
       businessId: conversation.businessId,

@@ -30,8 +30,16 @@ export type LedgerSnapshot = {
   runReservedNano: NanoUsd;
 };
 
-/** Provider-reported tokens for one settled attempt; zero for non-chat models. */
-export type SpendUsage = { tokensIn: number; tokensOut: number };
+/** Provider-reported usage for one settled attempt; token counts are zero for non-chat models. */
+export type SpendUsage = {
+  tokensIn: number;
+  tokensOut: number;
+  /** Reasoning tokens inside tokensOut, when the provider reports them. */
+  reasoningTokens?: number | null;
+  finishReason?: string | null;
+  /** Provider usage object as JSON text. */
+  usageRaw?: string | null;
+};
 
 /**
  * Spend ledger. reserve() must check every limit and record the reservation

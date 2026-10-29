@@ -53,6 +53,8 @@ export type ChatCall = CallBase & {
   jsonSchema?: JsonSchemaFormat;
   /** Tools the model may call; only those permitted for the conversation. */
   tools?: ToolDefinition[];
+  /** Sent as reasoning_effort; omitted means the endpoint default. */
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 };
 
 export type TranscribeCall = CallBase & {
@@ -81,7 +83,7 @@ export type ModelCall = ChatCall | TranscribeCall | ImageCall | SegmentCall;
 
 /** Billable units reported by the provider for one attempt. */
 export type BillingUnits =
-  | { kind: "chat"; promptTokens: number; cachedTokens: number; completionTokens: number }
+  | { kind: "chat"; promptTokens: number; cachedTokens: number; completionTokens: number; reasoningTokens?: number }
   | { kind: "transcribe"; audioMs: number }
   | { kind: "image"; images: number }
   | { kind: "segment"; images: number };
@@ -97,6 +99,10 @@ export type DispatchResult = {
   toolCalls?: ToolCallRequest[];
   /** The model answered, but not in the tool protocol; output holds the raw text. */
   protocolError?: string;
+  /** Provider finish reason, e.g. "stop" or "length". */
+  finishReason?: string;
+  /** The provider's usage object as returned, for the ledger. */
+  usageRaw?: unknown;
   errorBody?: string;
 };
 

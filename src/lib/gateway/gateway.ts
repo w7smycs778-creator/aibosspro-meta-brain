@@ -3,7 +3,7 @@ import { PreDispatchError } from "./errors";
 import type { SpendLedger, SpendUsage } from "./ledger";
 import type { NanoUsd } from "./money";
 import { actualCost, estimateMaxCost, PRICES, type PriceTable } from "./pricing";
-import type { AttemptRecord, BillingUnits, DenyReason, DispatchResult, Dispatcher, GatewayResult, ModelCall } from "./types";
+import type { AttemptRecord, DenyReason, DispatchResult, Dispatcher, GatewayResult, ModelCall } from "./types";
 
 export type GatewayOptions = {
   ledger: SpendLedger;
@@ -115,7 +115,7 @@ export class SpendGateway {
       }
       const latencyMs = Math.round(this.now() - started);
       const settledNano = actualCost(call, result.units, this.prices) ?? estimate;
-      await ledger.settle(r.reservationId, settledNano, usageOf(result.units));
+      await ledger.settle(r.reservationId, settledNano, usageOf(result));
       attempts.push({ attempt, status: result.status, reservedNano: estimate, settledNano, latencyMs });
 
       if (result.ok || !result.retryable || attempt === maxAttempts) {
@@ -142,10 +142,17 @@ function sum(attempts: AttemptRecord[], key: "reservedNano" | "settledNano" | "l
   return attempts.reduce((n, a) => n + a[key], 0);
 }
 
-function usageOf(units: BillingUnits | null): SpendUsage {
-  return units?.kind === "chat"
-    ? { tokensIn: units.promptTokens, tokensOut: units.completionTokens }
-    : { tokensIn: 0, tokensOut: 0 };
+function usageOf(result: DispatchResult): SpendUsage {
+  const units = result.units;
+  const tokens: Pick<SpendUsage, "tokensIn" | "tokensOut" | "reasoningTokens"> =
+    units?.kind === "chat"
+      ? { tokensIn: units.promptTokens, tokensOut: units.completionTokens, reasoningTokens: units.reasoningTokens ?? null }
+      : { tokensIn: 0, tokensOut: 0, reasoningTokens: null };
+  return {
+    ...tokens,
+    finishReason: result.finishReason ?? null,
+    usageRaw: result.usageRaw === undefined ? null : JSON.stringify(result.usageRaw).slice(0, 2_000),
+  };
 }
 
 function errorText(err: unknown): string {

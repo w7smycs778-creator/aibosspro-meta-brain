@@ -5,7 +5,7 @@ import { runToolLoop, type ProposedStep, type ToolLoopResult } from "../gateway/
 import type { ChatMessage } from "../gateway/types";
 import { SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
-import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
+import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
 import { localDate, weekdayOf } from "./time";
 import { ENGINE_TOOLS } from "./tools";
 import { latestAvailability, verifyText, verifyToolCall, type Facts } from "./verifier";
@@ -89,6 +89,7 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       model: d.model,
       messages: buildMessages(brainVersion.brain, history, input.text, d.now()),
       maxOutputTokens: ENGINE_MAX_OUTPUT_TOKENS,
+      reasoningEffort: ENGINE_REASONING_EFFORT,
       verify: (step) => verifyStep(store, conversation.id, brainVersion.brain, step),
       now: d.now,
     });

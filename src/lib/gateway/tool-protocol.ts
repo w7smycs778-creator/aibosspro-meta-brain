@@ -36,6 +36,46 @@ export function jsonModeInstructions(tools: ToolDefinition[]): string {
   ].join("\n");
 }
 
+/**
+ * response_format for json mode: exactly one step object, either
+ * {type:"tool_call", name, args} with name from the permitted tools, or
+ * {type:"final", text}. decodeJsonMode still validates the reply in case the
+ * endpoint ignores response_format.
+ */
+export function jsonModeResponseFormat(tools: ToolDefinition[]) {
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "agent_step",
+      strict: false,
+      schema: {
+        type: "object",
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["tool_call"] },
+              name: { type: "string", enum: tools.map((t) => t.name) },
+              args: { type: "object" },
+            },
+            required: ["type", "name", "args"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["final"] },
+              text: { type: "string" },
+            },
+            required: ["type", "text"],
+            additionalProperties: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
 /** Messages for an endpoint with no tool support: tools in the system prompt, calls and results as text. */
 export function encodeJsonMode(messages: ChatMessage[], tools: ToolDefinition[]): Array<{ role: string; content: string }> {
   const instructions = jsonModeInstructions(tools);

@@ -8,7 +8,11 @@ import type { AvailabilityResult } from "./tools";
 
 export type Rule = "price" | "service_price" | "discount" | "duration" | "time" | "booking_claim" | "booking_slot";
 
-export type Check = { rule: Rule; claim: string; pass: boolean; detail?: string };
+/**
+ * One check. An inconclusive check (a known price with no unambiguous service)
+ * does not block; it is recorded for owner review when nothing else fails.
+ */
+export type Check = { rule: Rule; claim: string; pass: boolean; detail?: string; inconclusive?: boolean };
 export type Verdict = { pass: boolean; checks: Check[] };
 
 export type Facts = {
@@ -31,7 +35,10 @@ export function latestAvailability(turns: Turn[]): AvailabilityResult | null {
   return null;
 }
 
-const NAME_WINDOW = 40;
+/** Max gap between a service name and the price bound to it. */
+const BIND_WINDOW = 60;
+/** Context searched around a booking claim for negation or condition words. */
+const CLAIM_WINDOW = 40;
 const NEGATION_BEFORE = /\b(not|no|nothing|never|until|once|when|after|before|pending|awaiting|yet)\b|n't\b/i;
 const CONDITION_AFTER = /^\W*\b(until|once|after|when|by the owner|pending|yet)\b/i;
 
@@ -54,6 +61,38 @@ function pricesByService(brain: BusinessBrain): Map<string, Set<number>> {
   return out;
 }
 
+/** "Kids cut (under 12)" -> ["Kids cut (under 12)", "Kids cut"]: the name, and the name without a trailing bracketed qualifier. */
+function nameForms(name: string): string[] {
+  const stripped = name.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  return stripped && stripped !== name ? [name, stripped] : [name];
+}
+
+type Span = { start: number; end: number };
+
+/** Service-name occurrences, longest match wins where two forms start at the same place. */
+function nameSpans(text: string, brain: BusinessBrain): Array<Span & { id: string }> {
+  const spans: Array<Span & { id: string }> = [];
+  for (const s of brain.services) {
+    for (const form of nameForms(s.name)) {
+      for (const m of text.matchAll(new RegExp(escape(form), "gi"))) spans.push({ id: s.id, start: m.index!, end: m.index! + m[0].length });
+    }
+  }
+  return spans.filter((a) => !spans.some((b) => b !== a && b.start <= a.start && b.end >= a.end && b.end - b.start > a.end - a.start));
+}
+
+/**
+ * The service a price is bound to: the nearest service name before it, only
+ * when no other price, no sentence or line break, and at most BIND_WINDOW
+ * characters lie between them. Otherwise null (unbound).
+ */
+function boundService(text: string, price: Span, names: Array<Span & { id: string }>, prices: Span[]): string | null {
+  const near = names.filter((n) => n.end <= price.start).sort((a, b) => b.end - a.end)[0];
+  if (!near || price.start - near.end > BIND_WINDOW) return null;
+  if (prices.some((p) => p !== price && p.start >= near.end && p.end <= price.start)) return null;
+  if (/\n|[.!?]\s/.test(text.slice(near.end, price.start))) return null;
+  return near.id;
+}
+
 /** "10:00", "10:30pm", "10am" -> "HH:MM" 24h. */
 function normaliseTime(h: string, m: string | undefined, ampm: string | undefined): string | null {
   let hour = Number(h);
@@ -74,28 +113,26 @@ export function verifyText(text: string, facts: Facts): Verdict {
   const allPrices = new Set([...byService.values()].flatMap((s) => [...s]));
   const money = (c: number) => `${(c / 100).toFixed(2).replace(/\.00$/, "")}`;
 
-  // Service names in the text, for pairing a price with the service it follows.
-  const names: Array<{ id: string; end: number }> = [];
-  for (const s of brain.services) {
-    for (const m of text.matchAll(new RegExp(escape(s.name), "gi"))) names.push({ id: s.id, end: m.index! + m[0].length });
-  }
+  const names = nameSpans(text, brain);
+  const priceMatches = [...text.matchAll(/([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?)\b/gi)];
+  const priceSpans: Span[] = priceMatches.map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
 
-  for (const m of text.matchAll(/([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?)\b/gi)) {
+  priceMatches.forEach((m, i) => {
     const claim = m[0];
     const cents = toCents(m[2] ?? m[3]);
     if (!allPrices.has(cents)) {
       checks.push({ rule: "price", claim, pass: false, detail: `${money(cents)} is not a listed or discounted price` });
-      continue;
+      return;
     }
-    const near = names.filter((n) => n.end <= m.index! && m.index! - n.end <= NAME_WINDOW).sort((a, b) => b.end - a.end)[0];
-    if (near) {
-      const ok = byService.get(near.id)!.has(cents);
-      const name = brain.services.find((s) => s.id === near.id)!.name;
-      checks.push({ rule: "service_price", claim: `${name} ${claim}`, pass: ok, ...(!ok && { detail: `${name} is not priced ${money(cents)}` }) });
-    } else {
-      checks.push({ rule: "price", claim, pass: true });
+    const id = boundService(text, priceSpans[i], names, priceSpans);
+    if (!id) {
+      checks.push({ rule: "price", claim, pass: true, inconclusive: true, detail: "listed price with no unambiguous service; for owner review" });
+      return;
     }
-  }
+    const ok = byService.get(id)!.has(cents);
+    const name = brain.services.find((s) => s.id === id)!.name;
+    checks.push({ rule: "service_price", claim: `${name} ${claim}`, pass: ok, ...(!ok && { detail: `${name} is not priced ${money(cents)}` }) });
+  });
 
   const percents = new Set(brain.discounts.map((d) => d.percentOff));
   for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?%/g)) {
@@ -129,7 +166,7 @@ export function verifyText(text: string, facts: Facts): Verdict {
 
   const confirmed = facts.bookings.some((b) => b.status === "confirmed");
   for (const m of text.matchAll(/\b(confirmed|booked|reserved|all set)\b/gi)) {
-    const before = text.slice(Math.max(0, m.index! - NAME_WINDOW), m.index!);
+    const before = text.slice(Math.max(0, m.index! - CLAIM_WINDOW), m.index!);
     const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 30);
     if (NEGATION_BEFORE.test(before) || CONDITION_AFTER.test(after)) {
       checks.push({ rule: "booking_claim", claim: m[0], pass: true, detail: "negated or conditional" });

@@ -7,7 +7,9 @@ import { DEMO_SCRIPT } from "./demo-script";
 
 export const AI_DISCLOSURE = "[AI assistant] ";
 export const OWNER_HELP_REPLY = "Thanks, I've passed this to the team and someone will get back to you shortly.";
-export const ENGINE_MAX_OUTPUT_TOKENS = 1_024;
+/** Spark counts reasoning inside max_completion_tokens; 1,024 ran out before the JSON on 2026-10-29. */
+export const ENGINE_MAX_OUTPUT_TOKENS = 2_048;
+export const ENGINE_REASONING_EFFORT = "low" as const;
 
 export type EngineDeps = {
   store: Storage;

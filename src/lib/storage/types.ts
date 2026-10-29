@@ -116,6 +116,12 @@ export type SpendEntry = {
   /** Actual cost once settled; null while reserved or after release. */
   settledNano: NanoUsd | null;
   state: "reserved" | "settled" | "released";
+  /** Provider finish reason ("stop", "length", ...); null if unreported or unsettled. */
+  finishReason: string | null;
+  /** Reasoning tokens inside tokensOut; null if unreported. */
+  reasoningTokens: number | null;
+  /** Provider usage object as JSON text. */
+  usageRaw: string | null;
 };
 
 export type NewConversation = {

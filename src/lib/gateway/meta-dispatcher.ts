@@ -2,12 +2,23 @@
 // createLiveGateway() and must never be called except through SpendGateway.
 import { LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
 import { assertLiveInferenceAllowed, type LedgerProbe } from "./live-gate";
-import { decodeJsonMode, decodeNative, encodeJsonMode, encodeNative, toolMode, type DecodedStep } from "./tool-protocol";
+import {
+  decodeJsonMode,
+  decodeNative,
+  encodeJsonMode,
+  encodeNative,
+  jsonModeResponseFormat,
+  toolMode,
+  type DecodedStep,
+} from "./tool-protocol";
 import type { BillingUnits, ChatCall, DispatchResult, Dispatcher, Env, ModelCall, ToolCallRequest } from "./types";
 
 type FetchFn = typeof fetch;
 
 const REQUEST_TIMEOUT_MS = 120_000;
+
+/** The raw chat usage object is logged once per process so its real keys are on record. */
+let usageLogged = false;
 const ERROR_BODY_LIMIT = 2_000;
 
 export class MetaDispatcher implements Dispatcher {
@@ -93,30 +104,40 @@ export class MetaDispatcher implements Dispatcher {
     const base = {
       model: call.model,
       max_completion_tokens: call.maxOutputTokens,
+      ...(call.reasoningEffort && { reasoning_effort: call.reasoningEffort }),
       ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
     };
     const payload =
       mode === "json"
-        ? { ...base, messages: encodeJsonMode(call.messages, call.tools!) }
+        ? { ...base, messages: encodeJsonMode(call.messages, call.tools!), response_format: jsonModeResponseFormat(call.tools!) }
         : mode === "native"
           ? { ...base, ...encodeNative(call.messages, call.tools!) }
           : { ...base, messages: call.messages };
     return this.json(url, auth, payload, (body) => {
-      const message = body?.choices?.[0]?.message;
+      const choice = body?.choices?.[0];
+      const message = choice?.message;
       const content: string | undefined = message?.content ?? undefined;
-      const units: BillingUnits | null = body?.usage
+      const usage = body?.usage;
+      const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens;
+      const units: BillingUnits | null = usage
         ? {
             kind: "chat",
-            promptTokens: num(body.usage.prompt_tokens),
-            cachedTokens: num(body.usage.prompt_tokens_details?.cached_tokens),
-            completionTokens: num(body.usage.completion_tokens),
+            promptTokens: num(usage.prompt_tokens),
+            cachedTokens: num(usage.prompt_tokens_details?.cached_tokens),
+            completionTokens: num(usage.completion_tokens),
+            ...(typeof reasoning === "number" && { reasoningTokens: num(reasoning) }),
           }
         : null;
-      if (!mode) return { output: content, units };
+      if (!usageLogged) {
+        usageLogged = true;
+        console.log("meta chat usage object (logged once):", JSON.stringify(usage ?? null), "finish_reason:", choice?.finish_reason ?? null);
+      }
+      const meta = { units, finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined, usageRaw: usage };
+      if (!mode) return { output: content, ...meta };
       const step: DecodedStep = mode === "json" ? decodeJsonMode(content) : decodeNative(message);
       return step.ok
-        ? { output: step.text, toolCalls: step.toolCalls, units }
-        : { output: content, protocolError: step.error, units };
+        ? { output: step.text, toolCalls: step.toolCalls, ...meta }
+        : { output: content, protocolError: step.error, ...meta };
     });
   }
 
@@ -143,12 +164,19 @@ export class MetaDispatcher implements Dispatcher {
     } catch {
       return { ok: false, status: res.status, retryable: false, units: null, errorBody: `non-JSON body: ${text.slice(0, ERROR_BODY_LIMIT)}` };
     }
-    const { output, units, toolCalls, protocolError } = parse(parsed);
-    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError };
+    const { output, units, toolCalls, protocolError, finishReason, usageRaw } = parse(parsed);
+    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError, finishReason, usageRaw };
   }
 }
 
-type Parser = (body: any) => { output?: string; units: BillingUnits | null; toolCalls?: ToolCallRequest[]; protocolError?: string };
+type Parser = (body: any) => {
+  output?: string;
+  units: BillingUnits | null;
+  toolCalls?: ToolCallRequest[];
+  protocolError?: string;
+  finishReason?: string;
+  usageRaw?: unknown;
+};
 
 function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;

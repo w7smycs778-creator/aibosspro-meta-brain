@@ -1,6 +1,6 @@
 // Postgres store through Supabase with the service-role key. Server only: the
 // key bypasses RLS, so this module must never be imported by client code.
-// Tables and ledger functions: supabase/migrations/ (20261027120000, 20261029090000).
+// Tables and ledger functions: supabase/migrations/ (20261027120000, 20261029090000, 20261029150000, 20261029190000).
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../gateway/types";
@@ -327,6 +327,9 @@ export class SupabaseStore implements Storage {
         p_actual_nano: actualNano,
         p_tokens_in: usage.tokensIn,
         p_tokens_out: usage.tokensOut,
+        p_finish_reason: usage.finishReason ?? null,
+        p_reasoning_tokens: usage.reasoningTokens ?? null,
+        p_usage_raw: usage.usageRaw ?? null,
       }),
       "settle_model_spend",
     );
@@ -361,6 +364,9 @@ export class SupabaseStore implements Storage {
       reservedNano: Number(r.reserved_nano),
       settledNano: r.settled_nano === null ? null : Number(r.settled_nano),
       state: r.state,
+      finishReason: r.finish_reason ?? null,
+      reasoningTokens: r.reasoning_tokens ?? null,
+      usageRaw: r.usage_raw ?? null,
     }));
   }
 

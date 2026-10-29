@@ -100,6 +100,57 @@ describe("verifier", () => {
     expect(mismatched.checks).toEqual([expect.objectContaining({ rule: "service_price", pass: false })]);
   });
 
+  // Live run 2026-10-29: $25 (Kids cut) was credited to "Cut + beard" by proximity and a correct reply was blocked.
+  const MESSAGE_1 = (kids: string) =>
+    `We offer:\n- Classic cut, 30 min, $35\n- Beard trim, 15 min, $20\n- Cut + beard, 45 min, $50\n- ${kids}, 20 min, $25\n\n10% off Cut + beard on Tuesdays.`;
+
+  it("regression: the message-1 list passes with and without the (under 12) qualifier", () => {
+    for (const kids of ["Kids cut (under 12)", "Kids cut", "kids cut"]) {
+      const v = verifyText(MESSAGE_1(kids), facts());
+      expect(v.pass, kids).toBe(true);
+      expect(v.checks.filter((c) => c.rule === "service_price").map((c) => c.claim)).toEqual([
+        "Classic cut $35", "Beard trim $20", "Cut + beard $50", "Kids cut (under 12) $25",
+      ]);
+    }
+  });
+
+  it("a listed price with no unambiguous service is inconclusive, not a block", () => {
+    const v = verifyText(MESSAGE_1("Junior trim"), facts());
+    expect(v.pass).toBe(true);
+    expect(v.checks).toContainEqual(expect.objectContaining({ claim: "$25", inconclusive: true, pass: true }));
+  });
+
+  it("still blocks a wrong price bound to a service, an unlisted price and an unlisted discount", () => {
+    expect(verifyText("Cut + beard is $25.", facts()).checks).toContainEqual(
+      expect.objectContaining({ rule: "service_price", claim: "Cut + beard $25", pass: false }),
+    );
+    expect(verifyText("- Cut + beard, 45 min, $25", facts()).pass).toBe(false);
+    expect(verifyText("A Classic cut is $15 today.", facts()).checks).toContainEqual(expect.objectContaining({ rule: "price", claim: "$15", pass: false }));
+    expect(verifyText("Sure, 50% off.", facts()).checks).toContainEqual(expect.objectContaining({ rule: "discount", claim: "50%", pass: false }));
+  });
+
+  it("stores the candidate text in every verifier checkpoint, pass or fail", async () => {
+    const s = store();
+    await s.reset();
+    const { deps: d } = deps(s, [final("Cut + beard is $25."), final("Cut + beard is $50.")]);
+    const r = await handleInbound(inbound("price?", "cand-1"), d);
+    expect(r.outcome).toBe("final");
+    const verdicts = r.trace.filter((t) => t.checkpoint?.kind === "verifier").map((t) => t.checkpoint!);
+    expect(verdicts).toEqual([
+      expect.objectContaining({ pass: false, candidate: { text: "Cut + beard is $25." } }),
+      expect.objectContaining({ pass: true, candidate: { text: "Cut + beard is $50." } }),
+    ]);
+  });
+
+  it("stores tool arguments as the candidate for a tool-call check", async () => {
+    const s = store();
+    await s.reset();
+    const { deps: d } = deps(s, [call("get_hours"), final("We open at 09:00.")]);
+    const r = await handleInbound(inbound("hours?", "cand-2"), d);
+    const first = r.trace.find((t) => t.checkpoint?.kind === "verifier")!.checkpoint!;
+    expect(first).toMatchObject({ target: "get_hours", candidate: { tool: "get_hours", args: {} } });
+  });
+
   it("rejects a slot not in the latest availability, in text and in request_booking", () => {
     expect(verifyText("Thursday at 10:00 is open.", facts()).pass).toBe(true);
     expect(verifyText("Thursday at 11:30 is open.", facts()).pass).toBe(false);
