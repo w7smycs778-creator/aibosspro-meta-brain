@@ -99,6 +99,9 @@ Branch `day3a-storage`. No model was called: the tests and the scripted demo use
 
 - 2026-10-29 Day 3B1 progress: finish_reason persisted, verifier price-binding fixed, candidate text stored. Gate pending: tool mode selection.
 - 2026-10-29 Day 3B1 progress: per-tool args schema, leak guard, native tool_choice; mode selection pending probe. Native probe 1 (256 tokens, no date context): HTTP 200 with tools and tool_choice accepted, finish_reason length, content null, 249 reasoning tokens, $0.001832; inconclusive.
+- 2026-10-29 Native probe 2 (1 call, 1,024 tokens, reasoning_effort low, date and service ids in the system prompt): finish_reason tool_calls, tool_calls[0] = check_availability {"date":"2026-10-29","service":"cut_and_beard"}, $0.001610. Mode rule applied: NATIVE. MODEL_TOOL_MODE=native set in the local env file; the code default stays json.
+- 2026-10-29 Live gate run live-7b-native-20261029 (native tool mode, dev:local on the durable ./data ledger, run cap 8 calls and $0.50, global cap unchanged): "What do you offer?" -> list_services -> verified list; "Do you have Thursday 10:00 for a Cut + beard?" -> list_services -> check_availability {"date":"2026-10-29","service":"cut_and_beard"} -> verified reply; "Book it, I'm Dana" -> request_booking {"service":"cut_and_beard","slot":"2026-10-29T10:00","customer_name":"Dana",...} -> PENDING booking (10:00 America/New_York, 14:00Z) and a pending owner approval. 7 calls, every finish_reason tool_calls or stop, every verifier and leak check passed. Run total $0.016732; all live spend in ./data today $0.047240 across 21 rows, the same after stopping the server and reopening the store.
+- Day 3 binding gate MET (native): live Spark -> check_availability -> request_booking -> pending booking, finish_reason stop, durable spend $0.016732 across restart.
 
 ## Third-party
 

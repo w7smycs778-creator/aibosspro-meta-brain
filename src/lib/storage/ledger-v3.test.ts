@@ -181,3 +181,59 @@ describe("engine json-mode request", () => {
     expect((await store.listSpend())[0]).toMatchObject({ finishReason: "stop", reasoningTokens: 120 });
   });
 });
+
+describe("engine native-mode request (MODEL_TOOL_MODE=native)", () => {
+  it("drives check_availability(args) -> request_booking(args) -> PENDING booking through the real dispatcher", async () => {
+    const native = (message: Record<string, unknown>, finish: string) =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: null, ...message }, finish_reason: finish }],
+          usage: { prompt_tokens: 600, completion_tokens: 80, completion_tokens_details: { reasoning_tokens: 40 } },
+        }),
+        { status: 200 },
+      );
+    const toolCall = (id: string, name: string, args: Record<string, unknown>) =>
+      native({ tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls");
+    const replies = [
+      toolCall("t1", "check_availability", { date: "2026-11-05", service: "cut_and_beard" }),
+      native({ content: "Thursday Nov 5 at 10:00 is open for Cut + beard ($50)." }, "stop"),
+      toolCall("t2", "request_booking", { service: "cut_and_beard", slot: "2026-11-05T10:00", customer_name: "Dana", customer_contact: "050-0000000" }),
+      native({ content: "Thanks Dana, I've sent Thu Nov 5 at 10:00 to the owner for approval." }, "stop"),
+    ];
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => replies.shift()!);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const store = open(tempDir());
+    await store.reset();
+    const probe = { backend: "local" as const, ping: async () => {}, isDurable: async () => true };
+    const gateway = new SpendGateway({
+      ledger: new StoreSpendLedger(store, { hardCapNano: usdToNano(1), creditBalanceNano: usdToNano(150), bufferNano: usdToNano(20) }),
+      dispatcher: new MetaDispatcher({ ...env, MODEL_TOOL_MODE: "native" }, fetchSpy as unknown as typeof fetch, probe),
+    });
+    const deps = { store, gateway, model: "muse-spark-1.3", now: () => DEMO_CLOCK };
+    const msg = (text: string, id: string) => ({ businessId: SEED_BUSINESS_ID, channel: "panel" as const, externalConversationId: "panel-native", senderId: "panel-native", text, externalEventId: id });
+
+    const a = await handleInbound(msg("Do you have Thursday 10:00 for a Cut + beard?", "n1"), deps);
+    const b = await handleInbound(msg("Book it, I'm Dana 050-0000000", "n2"), deps);
+
+    expect([a.outcome, b.outcome]).toEqual(["final", "final"]);
+    const bodies = fetchSpy.mock.calls.map((c) => JSON.parse(c[1]!.body as string));
+    for (const body of bodies) {
+      expect(body.tool_choice).toBe("auto");
+      expect(body.response_format).toBeUndefined();
+      expect(body.reasoning_effort).toBe("low");
+      expect(body.tools.map((t: any) => t.function.name)).toEqual(ENGINE_TOOLS.map((t) => t.name));
+    }
+    expect(bodies[0].tools.find((t: any) => t.function.name === "check_availability").function.parameters.required).toEqual(["date", "service"]);
+    // The tool result goes back as an OpenAI tool message tied to the call id.
+    expect(bodies[1].messages.at(-2)).toMatchObject({ role: "assistant", tool_calls: [{ id: "t1", function: { name: "check_availability" } }] });
+    expect(bodies[1].messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "t1" });
+
+    const [booking] = await store.listBookings(SEED_BUSINESS_ID);
+    expect(booking).toMatchObject({ status: "pending_approval", serviceId: "cut_and_beard", customerName: "Dana", startsAt: "2026-11-05T15:00:00.000Z" });
+    expect(await store.getApproval(booking.approvalId!)).toMatchObject({ kind: "booking", status: "pending" });
+    expect(b.pendingApprovalId).toBe(booking.approvalId);
+    const rows = await store.listSpend();
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.finishReason)).toEqual(["tool_calls", "stop", "tool_calls", "stop"]);
+  });
+});
