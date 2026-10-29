@@ -22,7 +22,8 @@ npm run judge
 To turn on live inference, edit `.env` before (or after, then restart):
 
 ```bash
-MODEL_API_KEY=<your Meta Model API key>
+# your Meta Model API key, pasted after the = sign
+MODEL_API_KEY=<key>
 MODEL_CREDIT_BALANCE_USD=<credit left in Billing, e.g. 150>
 MODEL_SPEND_HARD_CAP_USD=5
 LIVE_CREDITS_VERIFIED=true
