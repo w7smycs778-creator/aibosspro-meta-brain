@@ -13,6 +13,7 @@ type OwnerState = {
   conversations?: Array<{ id: string; channel: string; externalId: string; mode: Mode; state: string; lastCustomerMessage: string | null }>;
   approvals?: Array<{ id: string; conversationId: string | null; booking: null | { serviceName: string; when: string; customerName: string | null; customerContact: string | null } }>;
   bookings?: Array<{ id: string; serviceName: string; when: string; status: string; customerName: string | null }>;
+  inference?: { live: boolean; reason: string | null };
 };
 type PanelMessage = { who: "customer" | "assistant" | "owner"; text: string; outcome?: string; trace?: Turn[] };
 
@@ -98,6 +99,12 @@ export function OwnerScreen() {
 
   return (
     <main className="grid min-h-screen grid-cols-1 gap-4 bg-gray-50 p-4 text-sm text-gray-900 lg:grid-cols-2">
+      {state?.inference && !state.inference.live && (
+        <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 lg:col-span-2">
+          <strong>Live inference is off:</strong> {state.inference.reason}. Customer messages are handed to the owner and no model is called. See
+          README, &quot;Spend safety&quot;.
+        </div>
+      )}
       <section className="space-y-4">
         <div className="rounded border bg-white p-3">
           <div className="flex items-center justify-between">

@@ -37,3 +37,4 @@ export async function assertLiveInferenceAllowed(env: Env, store: LedgerProbe | 
     }
   }
 }
+

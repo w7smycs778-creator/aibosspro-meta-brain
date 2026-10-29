@@ -254,3 +254,26 @@ describe("Hebrew", () => {
     expect(a.slots.some((x) => x.time === "10:00")).toBe(true);
   });
 });
+
+describe("live inference status (judge path)", () => {
+  const durable = { backend: "local" as const, ping: async () => {}, isDurable: async () => true };
+  const env = {
+    MODEL_SPEND_HARD_CAP_USD: "5",
+    MODEL_CREDIT_BALANCE_USD: "150",
+    MODEL_API_KEY: "dummy",
+    MODEL_API_BASE_URL: "https://api.meta.ai/v1",
+    LIVE_CREDITS_VERIFIED: "true",
+  };
+
+  it("names the first reason inference is off, and is live only when every condition holds", async () => {
+    const { liveInferenceStatus } = await import("../gateway");
+    expect(await liveInferenceStatus({ ...env, LIVE_CREDITS_VERIFIED: "" }, durable)).toEqual({
+      live: false,
+      reason: "LIVE_CREDITS_VERIFIED is not 'true'; the Meta dispatcher is blocked",
+    });
+    expect((await liveInferenceStatus({ ...env, MODEL_CREDIT_BALANCE_USD: "" }, durable)).reason).toBe("MODEL_CREDIT_BALANCE_USD is not set");
+    expect((await liveInferenceStatus({ ...env, MODEL_API_KEY: "" }, durable)).reason).toBe("MODEL_API_KEY is not set");
+    expect((await liveInferenceStatus(env, { ...durable, isDurable: async () => false })).reason).toBe("hosted inference blocked: the local spend ledger is not durable");
+    expect(await liveInferenceStatus(env, durable)).toEqual({ live: true, reason: null });
+  });
+});

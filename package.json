@@ -14,7 +14,9 @@
     "dev:local": "STORAGE_BACKEND=local next dev",
     "store:reset": "tsx --env-file=.env scripts/reset-store.ts",
     "mock:run": "tsx scripts/mock-run.ts",
-    "store:reset:supabase": "tsx --env-file=.env scripts/store-reset-supabase.ts"
+    "store:reset:supabase": "tsx --env-file=.env scripts/store-reset-supabase.ts",
+    "judge": "bash scripts/judge.sh",
+    "demo:reset": "STORAGE_BACKEND=local tsx scripts/demo-reset.ts"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",
