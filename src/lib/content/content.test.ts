@@ -243,6 +243,53 @@ describe("SAM 3.1 masks decoded with @meta-sam/parser (fixtures/sam/mug-output.t
     expect([...alphas].some((a) => a > 0 && a < 255)).toBe(true); // feathered edge
   });
 
+  /** Pixels at least 4 px inside the mask (nearest-neighbour mask scaled to the cutout, eroded). */
+  async function interiorAlpha(cutPng: Buffer, raster: Uint8Array, mw: number, mh: number): Promise<number[]> {
+    const { data, info } = await sharp(cutPng).raw().toBuffer({ resolveWithObject: true });
+    const nn = await sharp(Buffer.from(raster.map((v) => (v ? 255 : 0))), { raw: { width: mw, height: mh, channels: 1 } })
+      .resize(info.width, info.height, { fit: "fill", kernel: "nearest" })
+      .extractChannel(0)
+      .raw()
+      .toBuffer();
+    const out: number[] = [];
+    for (let y = 4; y < info.height - 4; y++)
+      for (let x = 4; x < info.width - 4; x++) {
+        let inside = true;
+        for (let d = -4; d <= 4 && inside; d += 2) if (!nn[(y + d) * info.width + x] || !nn[y * info.width + x + d]) inside = false;
+        if (inside) out.push(data[(y * info.width + x) * 4 + 3]);
+      }
+    return out;
+  }
+
+  it("regression: the alpha buffer keeps the decoder's stride (no stripes, no shear)", async () => {
+    // A 79x193 mask whose left half is on, scaled up 3.71875x as for the demo photo.
+    const mw = 79;
+    const mh = 193;
+    const raster = new Uint8Array(mw * mh);
+    for (let y = 0; y < mh; y++) for (let x = 0; x < 40; x++) raster[y * mw + x] = 1;
+    const sent = await sharp({ create: { width: mw, height: mh, channels: 3, background: "#555555" } }).jpeg().toBuffer();
+    const original = await sharp({ create: { width: 294, height: 718, channels: 3, background: "#555555" } }).jpeg().toBuffer();
+    const cut = await buildCutout(sent, { alpha: null, box: [0, 0, mw, mh], format: "test", boxMask: { raster, width: mw, height: mh } }, original);
+    expect(cut.kind).toBe("mask");
+    const { data, info } = await sharp(cut.png).raw().toBuffer({ resolveWithObject: true });
+    expect([info.width, info.height, info.channels]).toEqual([294, 718, 4]);
+    // Every row agrees: opaque on the left, clear on the right. A stride error makes rows disagree.
+    for (let y = 10; y < info.height - 10; y += 7) {
+      expect(data[(y * info.width + Math.round(info.width * 0.2)) * 4 + 3], `row ${y} left`).toBeGreaterThanOrEqual(250);
+      expect(data[(y * info.width + Math.round(info.width * 0.8)) * 4 + 3], `row ${y} right`).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("regression: the interior of a decoded mask is opaque (alpha >= 250 for at least 95% of interior pixels)", async () => {
+    const original = await sharp({ create: { width: 1280, height: 960, channels: 3, background: "#777777" } }).jpeg().toBuffer();
+    const sent = await sharp(original).resize(640, 480).jpeg().toBuffer();
+    const seg = await parseSegmentation(MUG, 640, 480);
+    const cut = await buildCutout(sent, seg, original);
+    const interior = await interiorAlpha(cut.png, seg.boxMask!.raster, seg.boxMask!.width, seg.boxMask!.height);
+    expect(interior.length).toBeGreaterThan(1_000);
+    expect(interior.filter((a) => a >= 250).length / interior.length).toBeGreaterThanOrEqual(0.95);
+  });
+
   it("falls back to the box crop with a vignette when a mask does not decode", async () => {
     // Same response with the mask payload damaged.
     const broken = MUG.replace(/(data=216,241,~)(.{40})/, (_m, head) => `${head}${"\u0000".repeat(40)}`);

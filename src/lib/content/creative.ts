@@ -4,7 +4,7 @@
 // gateway and writes a ledger row. Any model step may fail; both images are
 // always produced.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import sharp from "sharp";
 import type { EngineDeps } from "../engine/deps";
@@ -142,7 +142,8 @@ export async function samCopy(original: Buffer): Promise<Buffer> {
   return sharp(original).rotate().resize(SEND_MAX_PX, SEND_MAX_PX, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
 }
 
-export type RegenerateOptions = { object: string; segment: boolean; caption: boolean; captionAttempts?: number };
+/** segment: true = new SAM call; "saved" = re-parse the saved SAM output with the exact copy SAM saw (no call); false = keep the cutout. */
+export type RegenerateOptions = { object: string; segment: boolean | "saved"; caption: boolean; captionAttempts?: number };
 
 /**
  * Rebuilds a pending creative in place (same id, offer and brain version):
@@ -165,7 +166,22 @@ export async function regenerateCreative(deps: EngineDeps, creativeId: string, o
   let cutoutPath = creative.media.cutout;
   let subject: Buffer = cutoutPath ? readFileSync(cutoutPath) : original;
 
-  if (opts.segment && deps.gateway) {
+  if (opts.segment === "saved") {
+    const savedPath = join(dir, "sam-output.json");
+    const sentPath = join(dir, "sent.jpg");
+    if (!existsSync(savedPath) || !existsSync(sentPath)) throw new ContentError("no saved SAM output for this creative", 409);
+    const sent = readFileSync(sentPath);
+    const { width: sw, height: sh } = await sharp(sent).metadata();
+    const seg = await parseSegmentation(readFileSync(savedPath, "utf8"), sw!, sh!);
+    const cut = await buildCutout(sent, seg, original);
+    diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason, boxInSent: seg.box, rebuiltFrom: savedPath, ...(seg.undecodedMask && { undecodedMask: seg.undecodedMask }) };
+    cutoutKind = cut.kind;
+    if (cut.kind !== "unavailable") {
+      writeFileSync(join(dir, "cutout.png"), cut.png);
+      cutoutPath = join(dir, "cutout.png");
+      subject = cut.png;
+    }
+  } else if (opts.segment && deps.gateway) {
     const sent = await samCopy(original);
     writeFileSync(join(dir, "sent.jpg"), sent);
     const { width: sw, height: sh } = await sharp(sent).metadata();

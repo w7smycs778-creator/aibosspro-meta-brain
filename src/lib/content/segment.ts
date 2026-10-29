@@ -10,7 +10,7 @@
 // a base64 PNG or COCO run-length mask is still accepted in case another
 // response shape appears.
 import { decodeMaskToRaster, parseImageStream, recordsOfKind } from "@meta-sam/parser";
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 
 export type Box = [x1: number, y1: number, x2: number, y2: number];
 export type Segmentation = {
@@ -85,10 +85,31 @@ function rleToAlpha(counts: number[], h: number, w: number): Buffer {
   return out;
 }
 
+/**
+ * Exactly one byte per pixel (w x h). sharp can promote a 1-channel input to
+ * 3-channel sRGB (blur does), and reading that buffer as 1 channel shears the
+ * alpha into stripes; on 2026-10-29 it gave the demo cutout a striped,
+ * half-transparent interior and kept bright background at its bottom. So the
+ * first channel is extracted and the size is checked.
+ */
+export async function singleChannel(img: Sharp, w: number, h: number): Promise<Buffer> {
+  const { data, info } = await img.extractChannel(0).raw().toBuffer({ resolveWithObject: true });
+  if (info.width !== w || info.height !== h || info.channels !== 1 || data.length !== w * h) {
+    throw new Error(`alpha buffer is ${info.width}x${info.height}x${info.channels} (${data.length} bytes), expected ${w}x${h}x1`);
+  }
+  return data;
+}
+
+/** Exactly three bytes per pixel (sRGB), w x h. */
+async function rgbOf(img: Sharp, w: number, h: number): Promise<Buffer> {
+  const { data, info } = await img.removeAlpha().toColourspace("srgb").raw().toBuffer({ resolveWithObject: true });
+  if (info.width !== w || info.height !== h || info.channels !== 3) throw new Error(`rgb buffer is ${info.width}x${info.height}x${info.channels}, expected ${w}x${h}x3`);
+  return data;
+}
+
 async function pngToAlpha(b64: string, w: number, h: number): Promise<Buffer> {
   const png = Buffer.from(b64.replace(/^data:image\/\w+;base64,/, ""), "base64");
-  const { data } = await sharp(png).resize(w, h, { fit: "fill" }).greyscale().raw().toBuffer({ resolveWithObject: true });
-  return data;
+  return singleChannel(sharp(png).resize(w, h, { fit: "fill" }).greyscale(), w, h);
 }
 
 function toBox(nums: number[], w: number, h: number): Box | null {
@@ -147,7 +168,7 @@ export async function parseSegmentation(raw: string | undefined, w: number, h: n
       const [mh, mw] = m.size ?? [h, w];
       const counts = typeof m.counts === "string" ? decodeCocoString(m.counts) : m.counts;
       const small = rleToAlpha(counts, mh, mw);
-      alpha = mh === h && mw === w ? small : (await sharp(small, { raw: { width: mw, height: mh, channels: 1 } }).resize(w, h, { fit: "fill" }).raw().toBuffer());
+      alpha = mh === h && mw === w ? small : await singleChannel(sharp(small, { raw: { width: mw, height: mh, channels: 1 } }).resize(w, h, { fit: "fill" }), w, h);
       format = "json+rle-mask";
     }
     if (alpha || box) return { alpha, box: box ? toBox(box, w, h) : null, format: alpha ? format : "json+box" };
@@ -261,7 +282,7 @@ export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buf
   const w = ow;
   const h = oh;
   if (seg.alpha && (sx !== 1 || sy !== 1)) {
-    seg = { ...seg, alpha: await sharp(seg.alpha, { raw: { width: sw!, height: sh!, channels: 1 } }).resize(ow!, oh!, { fit: "fill" }).raw().toBuffer() };
+    seg = { ...seg, alpha: await singleChannel(sharp(seg.alpha, { raw: { width: sw!, height: sh!, channels: 1 } }).resize(ow!, oh!, { fit: "fill" }), ow!, oh!) };
   }
   if (seg.box) seg = { ...seg, box: [seg.box[0] * sx, seg.box[1] * sy, seg.box[2] * sx, seg.box[3] * sy] };
   if (seg.boxMask && seg.box) {
@@ -275,9 +296,16 @@ export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buf
     const m = seg.boxMask;
     const on = m.raster.reduce((n, v) => n + v, 0) / m.raster.length;
     if (on >= 0.02) {
+      // The raster is row-major at the decoder's own W x H; it is resized to the box, never reinterpreted with box dims.
       const mask255 = Buffer.from(m.raster.map((v) => (v ? 255 : 0)));
-      const alpha = await sharp(mask255, { raw: { width: m.width, height: m.height, channels: 1 } }).resize(cw, ch, { fit: "fill", kernel: "cubic" }).blur(2).raw().toBuffer();
-      const rgb = await sharp(image).extract({ left, top, width: cw, height: ch }).removeAlpha().toColourspace("srgb").raw().toBuffer();
+      if (mask255.length !== m.width * m.height) throw new Error(`mask raster has ${mask255.length} entries, expected ${m.width}x${m.height}`);
+      // Opaque inside (255), partial only across the ~2 px feathered edge; no vignette, no global opacity.
+      const alpha = await singleChannel(
+        sharp(mask255, { raw: { width: m.width, height: m.height, channels: 1 } }).resize(cw, ch, { fit: "fill", kernel: "cubic" }).blur(2),
+        cw,
+        ch,
+      );
+      const rgb = await rgbOf(sharp(image).extract({ left, top, width: cw, height: ch }), cw, ch);
       const rgba = Buffer.alloc(cw * ch * 4);
       for (let i = 0; i < cw * ch; i++) {
         rgba[i * 4] = rgb[i * 3];
@@ -294,9 +322,9 @@ export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buf
     const c = coverage(seg.alpha);
     if (c >= 0.01 && c <= 0.9) {
       const [x1, y1, x2, y2] = maskBounds(seg.alpha, w!, h!);
-      const softAlpha = await sharp(seg.alpha, { raw: { width: w!, height: h!, channels: 1 } }).blur(1.2).raw().toBuffer();
+      const softAlpha = await singleChannel(sharp(seg.alpha, { raw: { width: w!, height: h!, channels: 1 } }).blur(1.2), w!, h!);
       // RGB plus the mask as an explicit fourth (alpha) channel.
-      const rgb = await sharp(image).removeAlpha().toColourspace("srgb").raw().toBuffer();
+      const rgb = await rgbOf(sharp(image), w!, h!);
       const rgba = Buffer.alloc(w! * h! * 4);
       for (let i = 0; i < w! * h!; i++) {
         rgba[i * 4] = rgb[i * 3];
