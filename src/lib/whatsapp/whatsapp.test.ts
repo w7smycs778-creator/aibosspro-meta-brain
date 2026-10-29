@@ -1,11 +1,23 @@
 import { createHmac } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ECHO_LIMIT, REPLY_PREFIX } from "./webhook";
+import { SEED_BUSINESS_ID } from "@/lib/storage/seed";
 import { verifySignature } from "./signature";
 
 // after() needs a Next request scope; tests collect the callbacks and run them.
 const pending: Array<() => unknown> = [];
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => void pending.push(fn) }));
+
+// The engine is mocked here; it has its own tests. Sending goes through the real sender with fetch mocked.
+const engine = vi.hoisted(() => ({ handleInbound: vi.fn() }));
+vi.mock("@/lib/engine/conversation-service", () => engine);
+const ENGINE_REPLY = "[AI assistant] Synthetic engine reply.";
+
+// Durable dedupe writes to a throwaway local store.
+process.env.STORAGE_BACKEND = "local";
+process.env.STORAGE_DIR = mkdtempSync(join(tmpdir(), "meta-brain-wa-"));
 
 const { GET, POST } = await import("@/app/api/whatsapp/webhook/route");
 
@@ -57,6 +69,8 @@ beforeEach(() => {
   fetchMock = vi.fn(async () => new Response(JSON.stringify({ messages: [{ id: "wamid.out" }] }), { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(console, "log").mockImplementation(() => {});
+  engine.handleInbound.mockReset();
+  engine.handleInbound.mockResolvedValue({ replyText: ENGINE_REPLY, outcome: "final" });
 });
 
 afterEach(() => {
@@ -118,18 +132,29 @@ describe("POST events", () => {
     expect(res.status).toBe(401);
   });
 
-  it("replies once with the disclosure prefix and a capped echo", async () => {
-    const long = "x".repeat(ECHO_LIMIT + 50);
-    const res = await post(textEvent("wamid.p3", long));
+  it("passes the message to handleInbound; the engine, not the route, sends the reply", async () => {
+    const res = await post(textEvent("wamid.p3", "Do you have Thursday 10:00?"));
     expect(res.status).toBe(200);
     await flush();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`https://graph.facebook.com/v25.0/${PHONE_ID}/messages`);
-    expect((init.headers as Record<string, string>).Authorization).toBe(["Bear", "er"].join("") + " " + ACCESS_TOKEN);
-    const sent = JSON.parse(init.body as string);
-    expect(sent.to).toBe("15550001234");
-    expect(sent.text.body).toBe(REPLY_PREFIX + "x".repeat(ECHO_LIMIT));
+    expect(engine.handleInbound).toHaveBeenCalledTimes(1);
+    expect(engine.handleInbound).toHaveBeenCalledWith({
+      businessId: SEED_BUSINESS_ID,
+      channel: "whatsapp",
+      externalConversationId: "15550001234",
+      senderId: "15550001234",
+      text: "Do you have Thursday 10:00?",
+      externalEventId: "wamid.p3",
+    });
+    // Delivery happens inside handleInbound (mocked here), after its last takeover check.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when the engine has no reply", async () => {
+    engine.handleInbound.mockResolvedValue({ replyText: null, outcome: "not_active" });
+    expect((await post(textEvent("wamid.p4"))).status).toBe(200);
+    await flush();
+    expect(engine.handleInbound).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("replies once to a duplicate message id", async () => {
@@ -137,7 +162,7 @@ describe("POST events", () => {
     expect((await post(body)).status).toBe(200);
     expect((await post(body)).status).toBe(200);
     await flush();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(engine.handleInbound).toHaveBeenCalledTimes(1);
   });
 
   it("ignores status updates and non-text messages", async () => {
@@ -149,6 +174,7 @@ describe("POST events", () => {
     expect((await post(statuses)).status).toBe(200);
     expect((await post(image)).status).toBe(200);
     await flush();
+    expect(engine.handleInbound).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

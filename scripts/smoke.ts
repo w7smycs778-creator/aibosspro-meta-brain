@@ -1,10 +1,12 @@
 // Day 1 smoke test: one call per model, through the spend gateway only.
-// Run: LIVE_CREDITS_VERIFIED=true MODEL_CREDIT_BALANCE_USD=<billing balance> \
+// Run: LIVE_CREDITS_VERIFIED=true STORAGE_BACKEND=supabase MODEL_CREDIT_BALANCE_USD=<billing balance> \
 //      npx tsx --env-file=.env scripts/smoke.ts [outDir]
+// The gateway refuses hosted inference unless the ledger is the Supabase store.
 // Stops at the first non-ok result and prints its full error.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createLiveGateway, formatUsd, InMemorySpendLedger, loadSpendConfig, usdToNano } from "../src/lib/gateway";
+import { createLiveGateway, formatUsd, usdToNano } from "../src/lib/gateway";
+import { createStore } from "../src/lib/storage";
 import type { GatewayResult, ModelCall } from "../src/lib/gateway";
 
 const RUN_CAP_USD = 10;
@@ -66,8 +68,9 @@ function sample(r: GatewayResult): string {
 }
 
 async function main() {
-  const ledger = new InMemorySpendLedger(loadSpendConfig());
-  const gateway = createLiveGateway({ ledger, run: { id: `smoke-${Date.now()}`, capNano: usdToNano(RUN_CAP_USD) } });
+  const store = await createStore();
+  const runId = `smoke-${Date.now()}`;
+  const gateway = createLiveGateway({ store, run: { id: runId, capNano: usdToNano(RUN_CAP_USD) } });
 
   const rows: string[] = ["| Model | HTTP | Latency ms | Reserved | Settled | Attempts | Output (100 chars) |", "|---|---|---|---|---|---|---|"];
   let failed: GatewayResult | null = null;
@@ -91,7 +94,7 @@ async function main() {
   }
 
   console.log(rows.join("\n"));
-  const snap = await ledger.snapshot();
+  const snap = await store.spendTotals(runId);
   console.log(`\nTotal settled: ${formatUsd(snap.settledNano)}  open reservations: ${formatUsd(snap.reservedNano)}  run cap: $${RUN_CAP_USD}`);
   if (failed) {
     console.log("\nFIRST FAILURE (full error):");

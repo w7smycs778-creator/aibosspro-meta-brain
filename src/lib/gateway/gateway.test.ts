@@ -1,9 +1,11 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { LocalStore } from "../storage/local-store";
 import { CREDIT_BUFFER_USD, loadSpendConfig } from "./config";
 import { SpendGateway } from "./gateway";
-import { InMemorySpendLedger, type LedgerLimits } from "./ledger";
+import { StoreSpendLedger, type LedgerLimits } from "./ledger";
 import { MetaDispatcher } from "./meta-dispatcher";
 import { usdToNano } from "./money";
 import { estimateMaxCost } from "./pricing";
@@ -18,6 +20,21 @@ function limits(over: Partial<{ capUsd: number; creditUsd: number; bufferUsd: nu
     bufferNano: usdToNano(over.bufferUsd ?? CREDIT_BUFFER_USD),
   };
 }
+
+// Every ledger here is the durable one, in a fresh SQLite store per test.
+const stores: LocalStore[] = [];
+const dirs: string[] = [];
+function storeLedger(l: LedgerLimits): StoreSpendLedger {
+  const dir = mkdtempSync(join(tmpdir(), "meta-brain-gw-"));
+  const store = LocalStore.open(dir);
+  dirs.push(dir);
+  stores.push(store);
+  return new StoreSpendLedger(store, l);
+}
+afterAll(async () => {
+  for (const s of stores) await s.close();
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
 
 const image = (): ImageCall => ({ kind: "image", model: "muse-image-1.0", prompt: "synthetic red mug on white", n: 1 });
 
@@ -45,7 +62,7 @@ const okImage = (): DispatchResult => ({ ok: true, status: 200, retryable: false
 
 describe("SpendGateway", () => {
   it("concurrent reservations cannot exceed the cap", async () => {
-    const ledger = new InMemorySpendLedger(limits({ capUsd: 1 }));
+    const ledger = storeLedger(limits({ capUsd: 1 }));
     const gw = new SpendGateway({ ledger, dispatcher: fakeDispatcher(okImage) });
     const results = await Promise.all(Array.from({ length: 500 }, () => gw.call(image())));
     const ok = results.filter((r) => r.outcome === "ok").length;
@@ -58,7 +75,7 @@ describe("SpendGateway", () => {
   });
 
   it("concurrent raw ledger reservations never overshoot", async () => {
-    const ledger = new InMemorySpendLedger(limits({ capUsd: 0.5 }));
+    const ledger = storeLedger(limits({ capUsd: 0.5 }));
     const amount = usdToNano(0.03);
     const res = await Promise.all(Array.from({ length: 200 }, () => ledger.reserve({ amountNano: amount, model: "m" })));
     const granted = res.filter((r) => r.granted).length;
@@ -67,7 +84,7 @@ describe("SpendGateway", () => {
   });
 
   it("counts every retry toward spend", async () => {
-    const ledger = new InMemorySpendLedger(limits());
+    const ledger = storeLedger(limits());
     const dispatcher = fakeDispatcher((_c, n) =>
       n < 3 ? { ok: false, status: 503, retryable: true, units: null, errorBody: "busy" } : okImage(),
     );
@@ -81,7 +98,7 @@ describe("SpendGateway", () => {
   });
 
   it("stops after maxRetries and still bills every attempt", async () => {
-    const ledger = new InMemorySpendLedger(limits());
+    const ledger = storeLedger(limits());
     const dispatcher = fakeDispatcher(() => ({ ok: false, status: 500, retryable: true, units: null }));
     const gw = new SpendGateway({ ledger, dispatcher, bounds: { maxRetries: 1 } });
     const r = await gw.call(image());
@@ -91,7 +108,7 @@ describe("SpendGateway", () => {
   });
 
   it("denies unknown cost without dispatching", async () => {
-    const ledger = new InMemorySpendLedger(limits());
+    const ledger = storeLedger(limits());
     const dispatcher = fakeDispatcher(okImage);
     const gw = new SpendGateway({ ledger, dispatcher });
     const unknownModel = await gw.call({ ...image(), model: "muse-unknown-9" });
@@ -103,7 +120,7 @@ describe("SpendGateway", () => {
   });
 
   it("denies once the hard cap is reached", async () => {
-    const ledger = new InMemorySpendLedger(limits({ capUsd: 0.02 }));
+    const ledger = storeLedger(limits({ capUsd: 0.02 }));
     const gw = new SpendGateway({ ledger, dispatcher: fakeDispatcher(okImage) });
     expect((await gw.call(image())).outcome).toBe("ok");
     expect((await gw.call(image())).outcome).toBe("ok");
@@ -112,7 +129,7 @@ describe("SpendGateway", () => {
 
   it("enforces the $20 credit buffer", async () => {
     // $20.015 of credit leaves $0.015 spendable: one $0.01 image, not two.
-    const ledger = new InMemorySpendLedger(limits({ creditUsd: 20.015 }));
+    const ledger = storeLedger(limits({ creditUsd: 20.015 }));
     const gw = new SpendGateway({ ledger, dispatcher: fakeDispatcher(okImage) });
     expect((await gw.call(image())).outcome).toBe("ok");
     expect(await gw.call(image())).toMatchObject({ outcome: "denied", reason: "insufficient_credit" });
@@ -120,7 +137,7 @@ describe("SpendGateway", () => {
   });
 
   it("settlement releases the unused reservation", async () => {
-    const ledger = new InMemorySpendLedger(limits());
+    const ledger = storeLedger(limits());
     const dispatcher = fakeDispatcher(() => ({
       ok: true,
       status: 200,
@@ -140,14 +157,14 @@ describe("SpendGateway", () => {
   });
 
   it("enforces the per-run cap", async () => {
-    const ledger = new InMemorySpendLedger(limits());
+    const ledger = storeLedger(limits());
     const gw = new SpendGateway({ ledger, dispatcher: fakeDispatcher(okImage), run: { id: "smoke", capNano: usdToNano(0.015) } });
     expect((await gw.call(image())).outcome).toBe("ok");
     expect(await gw.call(image())).toMatchObject({ outcome: "denied", reason: "run_cap_reached" });
   });
 
   it("denies out-of-bounds output tokens, images and rounds", async () => {
-    const gw = new SpendGateway({ ledger: new InMemorySpendLedger(limits()), dispatcher: fakeDispatcher(okImage) });
+    const gw = new SpendGateway({ ledger: storeLedger(limits()), dispatcher: fakeDispatcher(okImage) });
     expect(await gw.call(chat(100_000))).toMatchObject({ outcome: "denied", reason: "bounds_exceeded" });
     expect(await gw.call({ ...image(), n: 50 })).toMatchObject({ outcome: "denied", reason: "bounds_exceeded" });
     expect(await gw.call({ ...image(), round: 99 })).toMatchObject({ outcome: "denied", reason: "bounds_exceeded" });
@@ -169,7 +186,7 @@ describe("live-credit guard", () => {
     it(`blocks the real dispatcher when LIVE_CREDITS_VERIFIED=${String(flag)}`, async () => {
       const fetchSpy = vi.fn();
       const env = flag === undefined ? { ...baseEnv } : { ...baseEnv, LIVE_CREDITS_VERIFIED: flag };
-      const ledger = new InMemorySpendLedger(limits());
+      const ledger = storeLedger(limits());
       const gw = new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch) });
       const r = await gw.call(image());
       expect(r).toMatchObject({ outcome: "denied", reason: "live_credits_not_verified" });
@@ -178,11 +195,13 @@ describe("live-credit guard", () => {
     });
   }
 
-  it("lets the real dispatcher through only when LIVE_CREDITS_VERIFIED=true", async () => {
+  it("lets the real dispatcher through with LIVE_CREDITS_VERIFIED=true, a cap and a durable ledger", async () => {
     const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ created: 1, data: [{ b64_json: "AAAA" }] }), { status: 200 }));
-    const ledger = new InMemorySpendLedger(limits());
-    const env = { ...baseEnv, LIVE_CREDITS_VERIFIED: "true" };
-    const gw = new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch) });
+    const ledger = storeLedger(limits());
+    const env = { ...baseEnv, LIVE_CREDITS_VERIFIED: "true", STORAGE_BACKEND: "supabase", MODEL_SPEND_HARD_CAP_USD: "130" };
+    // Stand-in for a durable, reachable Supabase ledger; the parsing path is what is under test.
+    const supabaseProbe = { backend: "supabase" as const, ping: async () => {}, isDurable: async () => true };
+    const gw = new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch, supabaseProbe) });
     const r = await gw.call(image());
     expect(r.outcome).toBe("ok");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -192,7 +211,7 @@ describe("live-credit guard", () => {
 });
 
 describe("gateway isolation", () => {
-  it("only meta-dispatcher.ts touches the Meta API, its key or fetch", () => {
+  it("only meta-dispatcher.ts touches the Meta API, its key or server-side fetch", () => {
     const root = join(__dirname, "..", "..");
     const allowed = new Set(["lib/gateway/meta-dispatcher.ts"]);
     const offenders: string[] = [];
@@ -207,7 +226,9 @@ describe("gateway isolation", () => {
         const rel = relative(root, p);
         if (allowed.has(rel)) continue;
         const src = readFileSync(p, "utf8");
-        if (/api\.meta\.ai|MODEL_API_KEY|MODEL_API_BASE_URL|\bfetch\(/.test(src)) offenders.push(rel);
+        // Browser components call this app's own routes with fetch; they still may not name the Meta API or its key.
+        const browserOnly = /^["']use client["']/.test(src);
+        if (/api\.meta\.ai|MODEL_API_KEY|MODEL_API_BASE_URL/.test(src) || (!browserOnly && /\bfetch\(/.test(src))) offenders.push(rel);
       }
     };
     walk(root);

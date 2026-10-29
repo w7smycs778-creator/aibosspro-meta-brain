@@ -1,16 +1,16 @@
 import type { NanoUsd } from "./money";
-import type { BillingUnits, ModelCall } from "./types";
+import type { BillingUnits, ChatMessage, ModelCall } from "./types";
 
 // Standard-mode prices from https://dev.meta.ai/docs/pricing-rate-limits,
 // fetched 2026-10-27 (research/MODEL-PRICES-2026-10-27.md). Nano-USD per unit.
-type ChatPrice = { kind: "chat"; inputPerToken: NanoUsd; cachedPerToken: NanoUsd; outputPerToken: NanoUsd };
+export type ChatPrice = { kind: "chat"; inputPerToken: NanoUsd; cachedPerToken: NanoUsd; outputPerToken: NanoUsd };
 type TranscribePrice = { kind: "transcribe"; perSecond: NanoUsd };
 type PerImagePrice = { kind: "image" | "segment"; perImage: NanoUsd };
-type Price = ChatPrice | TranscribePrice | PerImagePrice;
+export type Price = ChatPrice | TranscribePrice | PerImagePrice;
 
 const SPARK: ChatPrice = { kind: "chat", inputPerToken: 1_250, cachedPerToken: 150, outputPerToken: 4_250 };
 
-export const PRICES: Readonly<Record<string, Price>> = {
+export const PRICES: PriceTable = {
   "muse-spark-1.3": SPARK,
   "muse-spark-1.1": SPARK,
   // $0.18 per hour, billed in whole seconds.
@@ -23,13 +23,23 @@ export const PRICES: Readonly<Record<string, Price>> = {
 
 /** Per-message framing allowance on top of content bytes. */
 const MESSAGE_OVERHEAD_TOKENS = 16;
+/** Tool-protocol instructions the dispatcher adds when tools are present. */
+const TOOL_PROTOCOL_OVERHEAD_TOKENS = 1_024;
 /** Lowest-bitrate WAV we accept: 8-bit mono 16 kHz = 16,000 bytes/s. */
 const MIN_WAV_BYTES_PER_SECOND = 16_000;
 
 const utf8 = new TextEncoder();
 
-function priceFor(call: ModelCall): Price | null {
-  const price = PRICES[call.model];
+export type PriceTable = Readonly<Record<string, Price>>;
+
+function messageBytes(m: ChatMessage): number {
+  let n = utf8.encode(m.content).length;
+  if (m.role === "assistant" && m.toolCalls) n += utf8.encode(JSON.stringify(m.toolCalls)).length;
+  return n;
+}
+
+function priceFor(call: ModelCall, prices: PriceTable): Price | null {
+  const price = prices[call.model];
   return price && price.kind === call.kind ? price : null;
 }
 
@@ -37,8 +47,8 @@ function priceFor(call: ModelCall): Price | null {
  * Upper bound on what one attempt can cost, or null when the cost cannot be
  * bounded (unknown model, or model/kind mismatch). Callers must deny on null.
  */
-export function estimateMaxCost(call: ModelCall): NanoUsd | null {
-  const price = priceFor(call);
+export function estimateMaxCost(call: ModelCall, prices: PriceTable = PRICES): NanoUsd | null {
+  const price = priceFor(call, prices);
   if (!price) return null;
   switch (call.kind) {
     case "chat": {
@@ -46,7 +56,10 @@ export function estimateMaxCost(call: ModelCall): NanoUsd | null {
       // A byte-level tokenizer never emits more tokens than UTF-8 bytes.
       let inputTokens = 0;
       for (const m of call.messages) {
-        inputTokens += utf8.encode(m.content).length + MESSAGE_OVERHEAD_TOKENS;
+        inputTokens += messageBytes(m) + MESSAGE_OVERHEAD_TOKENS;
+      }
+      if (call.tools?.length) {
+        inputTokens += utf8.encode(JSON.stringify(call.tools)).length + TOOL_PROTOCOL_OVERHEAD_TOKENS;
       }
       if (call.jsonSchema) {
         inputTokens += utf8.encode(JSON.stringify(call.jsonSchema)).length + MESSAGE_OVERHEAD_TOKENS;
@@ -65,8 +78,8 @@ export function estimateMaxCost(call: ModelCall): NanoUsd | null {
 }
 
 /** Actual cost from provider-reported units, or null when units are missing. */
-export function actualCost(call: ModelCall, units: BillingUnits | null): NanoUsd | null {
-  const price = priceFor(call);
+export function actualCost(call: ModelCall, units: BillingUnits | null, prices: PriceTable = PRICES): NanoUsd | null {
+  const price = priceFor(call, prices);
   if (!price || !units || units.kind !== call.kind) return null;
   switch (units.kind) {
     case "chat": {

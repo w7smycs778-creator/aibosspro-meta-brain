@@ -1,6 +1,35 @@
 import type { NanoUsd } from "./money";
 
-export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string; toolCalls?: ToolCallRequest[] }
+  | { role: "tool"; toolCallId: string; content: string };
+
+/** JSON Schema subset accepted for tool parameters: flat objects of primitives. */
+export type JsonSchemaProperty = {
+  type: "string" | "number" | "integer" | "boolean";
+  description?: string;
+  enum?: Array<string | number>;
+};
+
+export type JsonSchemaObject = {
+  type: "object";
+  properties: Record<string, JsonSchemaProperty>;
+  required?: string[];
+  additionalProperties?: boolean;
+};
+
+export type ToolDefinition = {
+  name: string;
+  description: string;
+  parameters: JsonSchemaObject;
+};
+
+/** A tool call the model asks for. */
+export type ToolCallRequest = { id: string; name: string; arguments: Record<string, unknown> };
+
+/** What the engine sends back to the model for one tool call. */
+export type ToolCallResult = { callId: string; name: string; ok: boolean; output?: unknown; error?: string };
 
 export type JsonSchemaFormat = {
   name: string;
@@ -12,6 +41,9 @@ type CallBase = {
   model: string;
   /** 1-based agent round within one conversation turn. */
   round?: number;
+  /** Ledger attribution. */
+  businessId?: string;
+  turnId?: string;
 };
 
 export type ChatCall = CallBase & {
@@ -19,6 +51,10 @@ export type ChatCall = CallBase & {
   messages: ChatMessage[];
   maxOutputTokens: number;
   jsonSchema?: JsonSchemaFormat;
+  /** Tools the model may call; only those permitted for the conversation. */
+  tools?: ToolDefinition[];
+  /** Sent as reasoning_effort; omitted means the endpoint default. */
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 };
 
 export type TranscribeCall = CallBase & {
@@ -47,7 +83,7 @@ export type ModelCall = ChatCall | TranscribeCall | ImageCall | SegmentCall;
 
 /** Billable units reported by the provider for one attempt. */
 export type BillingUnits =
-  | { kind: "chat"; promptTokens: number; cachedTokens: number; completionTokens: number }
+  | { kind: "chat"; promptTokens: number; cachedTokens: number; completionTokens: number; reasoningTokens?: number }
   | { kind: "transcribe"; audioMs: number }
   | { kind: "image"; images: number }
   | { kind: "segment"; images: number };
@@ -60,10 +96,19 @@ export type DispatchResult = {
   /** null when the provider did not report billable units. */
   units: BillingUnits | null;
   output?: string;
+  toolCalls?: ToolCallRequest[];
+  /** The model answered, but not in the tool protocol; output holds the raw text. */
+  protocolError?: string;
+  /** Provider finish reason, e.g. "stop" or "length". */
+  finishReason?: string;
+  /** The provider's usage object as returned, for the ledger. */
+  usageRaw?: unknown;
   errorBody?: string;
 };
 
 export interface Dispatcher {
+  /** Checks run once per gateway call, before any reservation or request. */
+  preflight?(): Promise<void>;
   dispatch(call: ModelCall): Promise<DispatchResult>;
 }
 
@@ -74,6 +119,7 @@ export type DenyReason =
   | "run_cap_reached"
   | "insufficient_credit"
   | "live_credits_not_verified"
+  | "hosted_inference_blocked"
   | "dispatcher_not_configured";
 
 export type AttemptRecord = {
@@ -90,6 +136,9 @@ export type GatewayResult =
       model: string;
       status: number;
       output?: string;
+      toolCalls?: ToolCallRequest[];
+      protocolError?: string;
+      finishReason?: string;
       errorBody?: string;
       attempts: AttemptRecord[];
       reservedNano: NanoUsd;

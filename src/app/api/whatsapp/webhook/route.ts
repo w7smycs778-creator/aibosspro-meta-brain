@@ -1,12 +1,12 @@
 import { after } from "next/server";
-import { sendText } from "@/lib/whatsapp/send";
+import { handleInbound } from "@/lib/engine/conversation-service";
+import { SEED_BUSINESS_ID } from "@/lib/storage/seed";
 import { safeEqual, verifySignature } from "@/lib/whatsapp/signature";
-import { MessageDedupe, extractTextMessages, last4, replyText } from "@/lib/whatsapp/webhook";
+import { getStore } from "@/lib/storage";
+import { extractTextMessages, last4, type InboundText } from "@/lib/whatsapp/webhook";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const dedupe = new MessageDedupe();
 
 /** Meta verification handshake. */
 export function GET(req: Request): Response {
@@ -20,7 +20,10 @@ export function GET(req: Request): Response {
   return new Response("Forbidden", { status: 403 });
 }
 
-/** Signed event delivery. Responds first; replies are sent after the response. */
+/** One WhatsApp number serves one business; the seeded demo business until onboarding exists. */
+const businessId = () => process.env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID;
+
+/** Signed event delivery. Responds first; the engine runs, and replies on WhatsApp, after the response. */
 export async function POST(req: Request): Promise<Response> {
   const raw = Buffer.from(await req.arrayBuffer());
   if (!verifySignature(raw, req.headers.get("x-hub-signature-256"), process.env.META_APP_SECRET)) {
@@ -34,19 +37,46 @@ export async function POST(req: Request): Promise<Response> {
     return new Response("OK", { status: 200 });
   }
 
-  const fresh = extractTextMessages(payload).filter((m) => dedupe.claim(m.id));
+  // Durable dedupe: an id is claimed once in the store, across instances and restarts.
+  const fresh: InboundText[] = [];
+  let storeError: unknown = null;
+  const inbound = extractTextMessages(payload);
+  if (inbound.length) {
+    try {
+      const store = await getStore();
+      for (const m of inbound) {
+        if (await store.claimEvent("whatsapp", m.id)) fresh.push(m);
+      }
+    } catch (err) {
+      storeError = err;
+    }
+  }
   if (fresh.length) {
     after(async () => {
       for (const m of fresh) {
         console.log("whatsapp inbound", { id: m.id, from4: last4(m.from) });
         try {
-          const res = await sendText(m.from, replyText(m.text));
-          console.log("whatsapp reply", { id: m.id, from4: last4(m.from), status: res.status });
+          const result = await handleInbound({
+            businessId: businessId(),
+            channel: "whatsapp",
+            externalConversationId: m.from,
+            senderId: m.from,
+            text: m.text,
+            externalEventId: m.id,
+          });
+          // The engine sends the reply itself, after a last takeover check, and records the delivery.
+          console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome, delivery: result.delivery ?? null });
         } catch (err) {
           console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name });
         }
       }
     });
+  }
+  if (storeError) {
+    // Claimed messages are answered above; the rest were never claimed, so a
+    // non-2xx makes Meta redeliver them.
+    console.error("whatsapp dedupe store unavailable", { error: (storeError as Error).name });
+    return new Response("Service Unavailable", { status: 503 });
   }
   return new Response("OK", { status: 200 });
 }

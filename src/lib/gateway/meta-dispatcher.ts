@@ -1,18 +1,37 @@
 // The only module that talks to the Meta Model API. It is constructed by
 // createLiveGateway() and must never be called except through SpendGateway.
 import { LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
-import type { BillingUnits, DispatchResult, Dispatcher, Env, ModelCall } from "./types";
+import { assertLiveInferenceAllowed, type LedgerProbe } from "./live-gate";
+import {
+  decodeJsonMode,
+  decodeNative,
+  encodeJsonMode,
+  encodeNative,
+  jsonModeResponseFormat,
+  toolMode,
+  type DecodedStep,
+} from "./tool-protocol";
+import type { BillingUnits, ChatCall, DispatchResult, Dispatcher, Env, ModelCall, ToolCallRequest } from "./types";
 
 type FetchFn = typeof fetch;
 
 const REQUEST_TIMEOUT_MS = 120_000;
+
+/** The raw chat usage object is logged once per process so its real keys are on record. */
+let usageLogged = false;
 const ERROR_BODY_LIMIT = 2_000;
 
 export class MetaDispatcher implements Dispatcher {
   constructor(
     private readonly env: Env = process.env,
     private readonly fetchFn: FetchFn = fetch,
+    private readonly ledgerStore?: LedgerProbe,
   ) {}
+
+  /** Live inference gate (src/lib/gateway/live-gate.ts), run by the gateway before any reservation. */
+  async preflight(): Promise<void> {
+    await assertLiveInferenceAllowed(this.env, this.ledgerStore);
+  }
 
   async dispatch(call: ModelCall): Promise<DispatchResult> {
     // Read at call time so the guard cannot be bypassed by early construction.
@@ -27,22 +46,7 @@ export class MetaDispatcher implements Dispatcher {
     const auth = { Authorization: `Bearer ${key}` };
     switch (call.kind) {
       case "chat":
-        return this.json(`${baseUrl}/chat/completions`, auth, {
-          model: call.model,
-          messages: call.messages,
-          max_completion_tokens: call.maxOutputTokens,
-          ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
-        }, (body) => ({
-          output: body?.choices?.[0]?.message?.content ?? undefined,
-          units: body?.usage
-            ? {
-                kind: "chat",
-                promptTokens: num(body.usage.prompt_tokens),
-                cachedTokens: num(body.usage.prompt_tokens_details?.cached_tokens),
-                completionTokens: num(body.usage.completion_tokens),
-              }
-            : null,
-        }));
+        return this.chat(`${baseUrl}/chat/completions`, auth, call);
 
       case "transcribe": {
         const form = new FormData();
@@ -89,9 +93,56 @@ export class MetaDispatcher implements Dispatcher {
               { type: "input_image", image_url: dataUrl },
             ],
           }],
-        }, (body) => ({ output: responsesText(body), units: { kind: "segment", images: 1 } }));
+        // The mask encoding is undocumented, so the whole output structure is kept for the parser.
+        }, (body) => ({
+          output: body?.output !== undefined ? JSON.stringify(body.output) : responsesText(body),
+          units: { kind: "segment", images: 1 },
+        }));
       }
     }
+  }
+
+  /** Chat, with tool calls carried per MODEL_TOOL_MODE when the call has tools. */
+  private chat(url: string, auth: Record<string, string>, call: ChatCall): Promise<DispatchResult> {
+    const mode = call.tools ? toolMode(this.env) : null;
+    const base = {
+      model: call.model,
+      max_completion_tokens: call.maxOutputTokens,
+      ...(call.reasoningEffort && { reasoning_effort: call.reasoningEffort }),
+      ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
+    };
+    const payload =
+      mode === "json"
+        ? { ...base, messages: encodeJsonMode(call.messages, call.tools!), response_format: jsonModeResponseFormat(call.tools!) }
+        : mode === "native"
+          ? { ...base, ...encodeNative(call.messages, call.tools!) }
+          : { ...base, messages: call.messages };
+    return this.json(url, auth, payload, (body) => {
+      const choice = body?.choices?.[0];
+      const message = choice?.message;
+      const content: string | undefined = message?.content ?? undefined;
+      const usage = body?.usage;
+      const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens;
+      const units: BillingUnits | null = usage
+        ? {
+            kind: "chat",
+            promptTokens: num(usage.prompt_tokens),
+            cachedTokens: num(usage.prompt_tokens_details?.cached_tokens),
+            completionTokens: num(usage.completion_tokens),
+            ...(typeof reasoning === "number" && { reasoningTokens: num(reasoning) }),
+          }
+        : null;
+      if (!usageLogged) {
+        usageLogged = true;
+        console.log("meta chat usage object (logged once):", JSON.stringify(usage ?? null), "finish_reason:", choice?.finish_reason ?? null);
+      }
+      const meta = { units, finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined, usageRaw: usage };
+      if (!mode) return { output: content, ...meta };
+      const step: DecodedStep = mode === "json" ? decodeJsonMode(content) : decodeNative(message);
+      return step.ok
+        ? { output: step.text, toolCalls: step.toolCalls, ...meta }
+        : { output: content, protocolError: step.error, ...meta };
+    });
   }
 
   private json(url: string, auth: Record<string, string>, payload: unknown, parse: Parser): Promise<DispatchResult> {
@@ -117,12 +168,19 @@ export class MetaDispatcher implements Dispatcher {
     } catch {
       return { ok: false, status: res.status, retryable: false, units: null, errorBody: `non-JSON body: ${text.slice(0, ERROR_BODY_LIMIT)}` };
     }
-    const { output, units } = parse(parsed);
-    return { ok: true, status: res.status, retryable: false, units, output };
+    const { output, units, toolCalls, protocolError, finishReason, usageRaw } = parse(parsed);
+    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError, finishReason, usageRaw };
   }
 }
 
-type Parser = (body: any) => { output?: string; units: BillingUnits | null };
+type Parser = (body: any) => {
+  output?: string;
+  units: BillingUnits | null;
+  toolCalls?: ToolCallRequest[];
+  protocolError?: string;
+  finishReason?: string;
+  usageRaw?: unknown;
+};
 
 function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;

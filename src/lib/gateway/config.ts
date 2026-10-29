@@ -43,18 +43,36 @@ function readUsd(env: Env, name: string): number {
   return value;
 }
 
+/** MODEL_SPEND_HARD_CAP_USD, required with no default; checked at server start. */
+export function loadHardCapNano(env: Env = process.env): NanoUsd {
+  const capUsd = readUsd(env, "MODEL_SPEND_HARD_CAP_USD");
+  if (capUsd > MAX_HARD_CAP_USD) {
+    throw new GatewayConfigError(`MODEL_SPEND_HARD_CAP_USD exceeds the $${MAX_HARD_CAP_USD} ceiling`);
+  }
+  return usdToNano(capUsd);
+}
+
+export const DEFAULT_TOOL_LOOP_MAX_ITERATIONS = 6;
+
+/** TOOL_LOOP_MAX_ITERATIONS: model rounds per customer turn, 1..maxRounds, default 6. */
+export function loadMaxToolIterations(env: Env = process.env): number {
+  const raw = env.TOOL_LOOP_MAX_ITERATIONS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_TOOL_LOOP_MAX_ITERATIONS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > DEFAULT_BOUNDS.maxRounds) {
+    throw new GatewayConfigError(`TOOL_LOOP_MAX_ITERATIONS must be an integer in 1..${DEFAULT_BOUNDS.maxRounds}`);
+  }
+  return n;
+}
+
 /**
  * MODEL_SPEND_HARD_CAP_USD: application cap, at most $130.
  * MODEL_CREDIT_BALANCE_USD: credit remaining in Billing when the ledger starts.
  * A missing balance is an unknown balance, so configuration fails closed.
  */
 export function loadSpendConfig(env: Env = process.env): SpendConfig {
-  const capUsd = readUsd(env, "MODEL_SPEND_HARD_CAP_USD");
-  if (capUsd > MAX_HARD_CAP_USD) {
-    throw new GatewayConfigError(`MODEL_SPEND_HARD_CAP_USD exceeds the $${MAX_HARD_CAP_USD} ceiling`);
-  }
   return {
-    hardCapNano: usdToNano(capUsd),
+    hardCapNano: loadHardCapNano(env),
     creditBalanceNano: usdToNano(readUsd(env, "MODEL_CREDIT_BALANCE_USD")),
     bufferNano: usdToNano(CREDIT_BUFFER_USD),
   };

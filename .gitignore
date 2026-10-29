@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 node_modules/
+data/
 .next/
 *.key
 research/
@@ -19,3 +20,7 @@ next-env.d.ts
 *.tsbuildinfo
 coverage/
 .vercel
+
+# Supabase CLI state
+supabase/.temp/
+DEPLOY-CHECKLIST.md
