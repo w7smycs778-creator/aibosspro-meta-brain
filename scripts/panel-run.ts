@@ -3,22 +3,25 @@
 // Live unless MODEL_CLIENT=mock; bound it with MODEL_RUN_ID, MODEL_RUN_CAP_USD
 // and MODEL_RUN_MAX_CALLS.
 // Run: STORAGE_BACKEND=local MODEL_RUN_ID=... MODEL_RUN_CAP_USD=0.30 MODEL_RUN_MAX_CALLS=6 \
-//      npx tsx --env-file=.env scripts/panel-run.ts "message 1" "message 2"
+//      npx tsx --env-file=.env scripts/panel-run.ts [--business=<id>] "message 1" "message 2"
 import { formatUsd } from "../src/lib/gateway";
 import { handleInbound } from "../src/lib/engine/conversation-service";
 import { engineDeps } from "../src/lib/engine/deps";
 import { SEED_BUSINESS_ID } from "../src/lib/storage";
 
 async function main() {
-  const messages = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const businessId = args.find((a) => a.startsWith("--business="))?.slice("--business=".length) || SEED_BUSINESS_ID;
+  const messages = args.filter((a) => !a.startsWith("--business="));
   if (!messages.length) throw new Error("pass at least one customer message");
   const deps = await engineDeps();
   if (!deps.gateway) throw new Error(`no gateway: ${deps.gatewayError}`);
   const conversation = `panel-run-${Date.now()}`;
+  console.log(`business ${businessId}`);
   for (const [i, text] of messages.entries()) {
     console.log(`\nCUSTOMER: ${text}`);
     const r = await handleInbound(
-      { businessId: SEED_BUSINESS_ID, channel: "panel", externalConversationId: conversation, senderId: conversation, text, externalEventId: `${conversation}-${i}` },
+      { businessId, channel: "panel", externalConversationId: conversation, senderId: conversation, text, externalEventId: `${conversation}-${i}` },
       deps,
     );
     for (const t of r.trace) {

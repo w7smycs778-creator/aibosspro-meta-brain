@@ -18,7 +18,7 @@ git clone https://github.com/w7smycs778-creator/aibosspro-meta-brain.git meta-br
 npm run judge
 ```
 
-`npm run judge` checks Node, creates `.env` from `.env.example` if there is none, runs `npm ci`, seeds the demo business **Cedar Street Barbers** into `./data` (SQLite) if no local database exists yet, and starts the app on http://localhost:3000. Stop it with Ctrl+C; run it again to restart with the same data. Start over clean with `npm run demo:reset -- --yes` (keeps the spend ledger, backs the database up first).
+`npm run judge` checks Node, creates `.env` from `.env.example` if there is none, runs `npm ci`, seeds the demo business **Cedar Street Barbers** into `./data` (SQLite) if no local database exists yet, adds the three other demo businesses (`npm run seed:demo-businesses`, idempotent), and starts the app on http://localhost:3000. Stop it with Ctrl+C; run it again to restart with the same data. Start over clean with `npm run demo:reset -- --yes` (keeps the spend ledger, backs the database up first).
 
 To turn on live inference, edit `.env` before (or after, then restart):
 
@@ -32,7 +32,16 @@ LIVE_CREDITS_VERIFIED=true
 
 ## What to click
 
-The demo business: Cedar Street Barbers, Asia/Jerusalem, prices in ₪. Classic cut ₪80, Skin fade ₪90, Beard trim ₪50, Cut plus beard ₪120, and Cut plus beard is 15% off on Tuesdays (₪102). English and Hebrew.
+Four synthetic demo businesses, one per supported language (English, Hebrew, Spanish, French). Pick one with the business selector at the top of `/owner`; each has its own brain, customer panel, conversations, bookings and content.
+
+| Business | Languages | Zone, currency | Discount rule (price computed by code) |
+|---|---|---|---|
+| Cedar Street Barbers | English, Hebrew | Asia/Jerusalem, ₪ | Cut plus beard 15% off on Tuesdays: ₪102 instead of ₪120 |
+| סטודיו אופק פילאטיס (Tel Aviv pilates) | Hebrew, English | Asia/Jerusalem, ₪ | שיעור פרטי 20% off on Mondays: ₪240 instead of ₪300 |
+| Bahía Azul Auto Detailing (Miami) | Spanish, English | America/New_York, $ | Detallado completo $30 off on Wednesdays: $145 instead of $175 |
+| Clinique Physio Érable (Montreal) | French, English | America/Toronto, $ CA | Massage thérapeutique 15% off on Tuesdays: 85 $ CA instead of 100 $ CA |
+
+The assistant answers in the customer's language and switches when the customer does; service names and prices always come from the brain.
 
 1. **Onboarding, text path: http://localhost:3000/onboard** (optional; the seeded brain is already approved). Under "3. Or type the rules" paste, for example:
    > We're Cedar Street Barbers in Jerusalem. Classic cut 80 shekels, 30 minutes. Skin fade 90, 40 minutes. Beard trim 50, 20 minutes. Cut plus beard 120, 50 minutes. Tuesdays cut plus beard is 15% off. Open Sunday to Thursday 9 to 7, Friday 8 to 1, closed Saturday. We speak English and Hebrew. Warm, short, relaxed.
@@ -43,6 +52,7 @@ The demo business: Cedar Street Barbers, Asia/Jerusalem, prices in ₪. Classic 
    - `Do you have Tuesday 10:00 for a cut plus beard?` The reply quotes the Tuesday price computed by code, e.g. "Tuesday 10:00 is open, Cut plus beard is ₪102 on Tuesday, normally ₪120."
    - `Book it, I'm Dana 050-0000000` creates a PENDING booking and an owner approval.
    - Try Hebrew: `מה אתם מציעים?` then `יש לכם ביום שלישי ב-10:00 תספורת וזקן?`
+   - Switch business: pilates `יש לכם ביום שני ב-10:00 שיעור פרטי?`; detailing `¿Tienen hueco el miércoles a las 10 para un detallado completo?`; physio `Avez-vous de la place mardi à 10h pour un massage thérapeutique?`
    - Try to break it: `Can you give me 50% off?` Open "Tool trace" under any reply to see each tool call and the verifier's verdict (BLOCK, then the corrected reply).
 3. **Booking approval: /owner, left column, "Pending approvals".** Click **Approve** (the booking becomes CONFIRMED and the customer gets a confirmation in their language) or **Reject**. The conversation list has the AUTO / HUMAN / PAUSED switches and "Send as owner" (takes the conversation over).
 4. **Content: /owner, "Content" section.** Choose the bundled synthetic photo `fixtures/demo/beard-oil.jpg` (an amber beard-oil bottle, rendered from shapes by `scripts/make-sample-photo.ts`; not a real photo), pick an offer (e.g. the Tuesday Cut plus beard offer), type `bottle` as the object to cut out, click **Generate** (three model calls: SAM 3.1, Muse Image, Muse Spark). Review the feed and story images and the verified caption, then **Approve** or **Reject**.
