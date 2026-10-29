@@ -83,6 +83,20 @@ Branch `day3a-storage`. No model was called: the tests and the scripted demo use
 - Step 7b (live): `LIVE_CREDITS_VERIFIED=true` and the cap were present in the local env, but `MODEL_CREDIT_BALANCE_USD` was not, so the gateway could not be configured and all three panel messages went to owner help with zero model calls. Ledger: 0 rows, $0.00.
 - Tests: `src/lib/engine/engine.test.ts` plus updated gate, tool-loop and webhook tests. Full suite 57/57, typecheck and `next build` clean.
 
+### 2026-10-29 — Day 3B1 close: governing rule reconciled, first live engine run
+
+- Governing rule reconciled (owner instruction, 2026-10-29, Day 3 Block B1 close brief). The intent was durability, not Postgres specifically. Local planning files updated, not committed:
+  - CLAUDE.md, old: "no hosted model inference until the spend ledger is durable in Postgres". New: "no live model inference until the spend ledger is durable (survives restart); a hosted deploy (VERCEL) additionally requires Postgres/Supabase".
+  - research/DECISION-2026-10-28.md section 3, old: "Durable spend before any hosted inference." New: "No live model inference until the spend ledger is durable (survives restart); a hosted deploy (VERCEL) additionally requires Postgres/Supabase."
+  - Not changed: the BUILD-PLAN.md Thu Oct 29 row still reads "durable spend in Postgres".
+- Bounded live runs: `MODEL_RUN_ID` with `MODEL_RUN_CAP_USD` and `MODEL_RUN_MAX_CALLS` scope the live gateway to one run with a spend cap and a hard limit on billable attempts, counted from the durable ledger (`src/lib/gateway/call-limit.ts`). Test added; suite 58/58.
+- Live run `live-7b-20261029` (muse-spark-1.3, json tool mode, `dev:local` on the durable `./data` ledger, run cap $0.50 and 6 calls, global cap unchanged). The gate passed (durable local file, LIVE_CREDITS_VERIFIED=true, not on Vercel).
+  - "What do you offer?": the model called `list_services` through JSON output, then answered; every verifier check passed (4 service prices, the 10% discount, 4 durations). 2 calls, $0.003253.
+  - "Do you have Thursday 10:00 for a Cut + beard?": the model called `list_services` again, then twice answered in prose instead of JSON ("I'll check if Thursday 10:00 is open for a Cut + beard." / "I'll check Thursday 10:00 for a Cut + beard."). Both of those calls reported exactly 1,024 completion tokens, the `max_completion_tokens` limit, which includes reasoning; the reply was most likely cut off by the token limit before the JSON. One correction retry was used; the turn went to owner help as designed. 3 calls, $0.013100.
+  - Stopped there per the run brief; the booking message was not sent. No booking or approval was created.
+  - Ledger: 5 rows, $0.016353 settled in `./data`; the same total read back after stopping the server and reopening the store.
+- Day 3 binding gate NOT MET: the live request did not reach a pending booking (model output stopped before the JSON tool call at the token limit).
+
 ## Third-party
 
 ## Day 2 close — 2026-10-28 (channel live)

@@ -1,4 +1,5 @@
 import type { Storage } from "../storage/types";
+import { CallLimitDispatcher } from "./call-limit";
 import { loadSpendConfig } from "./config";
 import { SpendGateway, type GatewayOptions } from "./gateway";
 import { StoreSpendLedger } from "./ledger";
@@ -31,8 +32,16 @@ export type * from "./types";
  * The dispatcher stays blocked unless assertLiveInferenceAllowed passes at
  * call time (src/lib/gateway/live-gate.ts).
  */
-export function createLiveGateway(opts: { store: Storage; run?: GatewayOptions["run"]; env?: Env }): SpendGateway {
+export function createLiveGateway(opts: {
+  store: Storage;
+  run?: GatewayOptions["run"];
+  /** With run: at most this many billable attempts in the run, counted from the ledger. */
+  maxCalls?: number;
+  env?: Env;
+}): SpendGateway {
   const env = opts.env ?? process.env;
   const ledger = new StoreSpendLedger(opts.store, loadSpendConfig(env));
-  return new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetch, opts.store), run: opts.run });
+  const meta = new MetaDispatcher(env, fetch, opts.store);
+  const dispatcher = opts.run && opts.maxCalls !== undefined ? new CallLimitDispatcher(meta, opts.store, opts.run.id, opts.maxCalls) : meta;
+  return new SpendGateway({ ledger, dispatcher, run: opts.run });
 }

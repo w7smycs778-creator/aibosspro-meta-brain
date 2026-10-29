@@ -1,4 +1,4 @@
-import { createLiveGateway, SpendGateway, StoreSpendLedger, loadSpendConfig } from "../gateway";
+import { createLiveGateway, SpendGateway, StoreSpendLedger, loadSpendConfig, usdToNano } from "../gateway";
 import { MOCK_MODEL, MOCK_PRICES, MockModelClient } from "../gateway/mock-client";
 import type { Env } from "../gateway/types";
 import { getStore } from "../storage";
@@ -39,10 +39,24 @@ export async function engineDeps(env: Env = process.env): Promise<EngineDeps> {
   }
   const model = env.MODEL_CHAT_MODEL?.trim() || "muse-spark-1.3";
   try {
-    return { store, gateway: createLiveGateway({ store, env }), model, now };
+    return { store, gateway: createLiveGateway({ store, env, ...liveRun(env) }), model, now };
   } catch (err) {
     return { store, gateway: null, gatewayError: (err as Error).message, model, now };
   }
+}
+
+/**
+ * Optional bounded live run: MODEL_RUN_ID with MODEL_RUN_CAP_USD (spend cap for
+ * the run) and MODEL_RUN_MAX_CALLS (billable attempts, retries included).
+ */
+function liveRun(env: Env): { run?: { id: string; capNano: number }; maxCalls?: number } {
+  const id = env.MODEL_RUN_ID?.trim();
+  if (!id) return {};
+  const capUsd = Number(env.MODEL_RUN_CAP_USD);
+  const maxCalls = Number(env.MODEL_RUN_MAX_CALLS);
+  if (!Number.isFinite(capUsd) || capUsd <= 0) throw new Error("MODEL_RUN_ID needs a positive MODEL_RUN_CAP_USD");
+  if (!Number.isInteger(maxCalls) || maxCalls < 1) throw new Error("MODEL_RUN_ID needs MODEL_RUN_MAX_CALLS >= 1");
+  return { run: { id, capNano: usdToNano(capUsd) }, maxCalls };
 }
 
 /** The owner screen and its APIs have no auth yet, so they run locally only. */

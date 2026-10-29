@@ -238,6 +238,18 @@ describe("live inference gate", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("a run call limit stops the attempt after the limit, before any request", async () => {
+    const fetchSpy = vi.fn(async () => okImage());
+    vi.stubGlobal("fetch", fetchSpy);
+    const store = durableStore();
+    const gw = createLiveGateway({ store, env, run: { id: "run-limit", capNano: usdToNano(1) }, maxCalls: 2 });
+    expect((await gw.call(image)).outcome).toBe("ok");
+    expect((await gw.call(image)).outcome).toBe("ok");
+    expect(await gw.call(image)).toMatchObject({ outcome: "denied", reason: "run_cap_reached" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect((await store.listSpend()).map((r) => r.state)).toEqual(["settled", "settled", "released"]);
+  });
+
   it("non-durable stores, a missing cap and an unreachable hosted ledger are refused", async () => {
     await expect(assertLiveInferenceAllowed(env, openStore(tempDir()))).rejects.toThrow(/not durable/);
     await expect(assertLiveInferenceAllowed(env, LocalStore.memory())).rejects.toThrow(/not durable/);
