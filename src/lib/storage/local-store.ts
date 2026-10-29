@@ -234,20 +234,25 @@ export class LocalStore implements Storage {
     this.db.close();
   }
 
-  async reset(): Promise<{ businessId: string }> {
+  /** A consistent copy of the database (WAL included) at to, through SQLite's backup API. */
+  async backup(to: string): Promise<void> {
+    await this.db.backup(to);
+  }
+
+  async reset(seed: BusinessBrain = SEED_BRAIN): Promise<{ businessId: string }> {
     this.db
       .transaction(() => {
         this.db.prepare("delete from businesses").run();
         const at = now();
         this.db
           .prepare("insert into businesses (id, name, created_at, whatsapp_default_mode) values (?, ?, ?, 'AUTO')")
-          .run(SEED_BUSINESS_ID, SEED_BRAIN.name, at);
+          .run(SEED_BUSINESS_ID, seed.name, at);
         this.db
           .prepare(
             `insert into brain_versions (business_id, version, brain, approved, created_at, approved_at, source_kind)
              values (?, 1, ?, 1, ?, ?, 'seed')`,
           )
-          .run(SEED_BUSINESS_ID, JSON.stringify(SEED_BRAIN), at, at);
+          .run(SEED_BUSINESS_ID, JSON.stringify(seed), at, at);
       })
       .immediate();
     return { businessId: SEED_BUSINESS_ID };

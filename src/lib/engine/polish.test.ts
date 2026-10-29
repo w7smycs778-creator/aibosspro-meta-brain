@@ -16,6 +16,7 @@ import { brainFacts } from "./brain-prompt";
 import { handleInbound } from "./conversation-service";
 import { DEMO_CLOCK } from "./demo-script";
 import { disclosureFor } from "./deps";
+import { decideBooking } from "./owner";
 import { availability, priceQuote, resolveService, type AvailabilityResult } from "./tools";
 import { verifyText, type Facts } from "./verifier";
 
@@ -36,9 +37,7 @@ async function cedarStore(): Promise<LocalStore> {
   dirs.push(d);
   const s = LocalStore.open(d);
   stores.push(s);
-  await s.reset();
-  const draft = await s.addBrainVersion(SEED_BUSINESS_ID, CEDAR_BRAIN, { kind: "seed", text: null, audioPath: null });
-  await s.approveBrainVersion(SEED_BUSINESS_ID, draft.version);
+  await s.reset(CEDAR_BRAIN);
   return s;
 }
 
@@ -216,6 +215,28 @@ describe("Hebrew", () => {
     expect(r2.replyText).toBe(`[עוזר AI] ${slot}`);
     expect(r2.trace.filter((t) => t.checkpoint?.kind === "verifier").every((t) => t.checkpoint!.pass)).toBe(true);
     expect(JSON.stringify(client.calls[0].messages[0])).toContain("Reply in the language of the customer's latest message");
+  });
+
+  it("a Hebrew booking request, approved and rejected by the owner, is answered in Hebrew", async () => {
+    const s = await cedarStore();
+    const book = (slot: string) => ({ service: "cut_plus_beard", slot, customer_name: "דנה", customer_contact: "050-0000000" });
+    const { deps: d } = deps(s, [
+      call("check_availability", { date: TUESDAY, service: "cut_plus_beard" }),
+      call("request_booking", book(`${TUESDAY}T10:00`)),
+      final("שלחתי את הבקשה לבעל העסק. התור עדיין לא מאושר."),
+      call("check_availability", { date: TUESDAY, service: "cut_plus_beard" }),
+      call("request_booking", book(`${TUESDAY}T12:00`)),
+      final("שלחתי גם את הבקשה הזו לבעל העסק לאישור."),
+    ]);
+    const first = await handleInbound(inbound("תקבע לי ביום שלישי ב-10:00 תספורת וזקן, דנה 050-0000000", "b1"), d);
+    const second = await handleInbound(inbound("ואפשר גם ב-12:00?", "b2"), d);
+    const [b1, b2] = await s.listBookings(SEED_BUSINESS_ID);
+    expect(b1).toMatchObject({ status: "pending_approval", priceCents: 10_200 });
+    const ok = await decideBooking(s, first.pendingApprovalId!, "approved", async () => ({ ok: true }) as never);
+    expect(ok.replyText).toBe("התור שלך לתספורת וזקן ביום שלישי, 3 בנובמבר בשעה 10:00 אושר. נתראה!");
+    const no = await decideBooking(s, second.pendingApprovalId!, "rejected", async () => ({ ok: true }) as never);
+    expect(no.replyText).toBe("מצטערים, התור לתספורת וזקן ביום שלישי, 3 בנובמבר בשעה 12:00 לא זמין בסוף. לבדוק לך מועד אחר?");
+    expect(b2.status).toBe("pending_approval");
   });
 
   it("a Hebrew customer handed to the owner gets the hand-off notice in Hebrew", async () => {

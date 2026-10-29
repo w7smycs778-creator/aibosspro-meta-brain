@@ -90,18 +90,18 @@ export class SupabaseStore implements Storage {
 
   async close(): Promise<void> {}
 
-  async reset(): Promise<{ businessId: string }> {
+  async reset(seed: BusinessBrain = SEED_BRAIN): Promise<{ businessId: string }> {
     // Cascades to brains, conversations, turns, approvals and bookings.
     check(await this.db.from("businesses").delete().neq("id", ""), "reset delete");
     const at = new Date().toISOString();
     check(
-      await this.db.from("businesses").insert({ id: SEED_BUSINESS_ID, name: SEED_BRAIN.name, created_at: at, whatsapp_default_mode: "AUTO" }),
+      await this.db.from("businesses").insert({ id: SEED_BUSINESS_ID, name: seed.name, created_at: at, whatsapp_default_mode: "AUTO" }),
       "reset business",
     );
     check(
       await this.db
         .from("brain_versions")
-        .insert({ business_id: SEED_BUSINESS_ID, version: 1, brain: SEED_BRAIN, approved: true, created_at: at, approved_at: at, source_kind: "seed" }),
+        .insert({ business_id: SEED_BUSINESS_ID, version: 1, brain: seed, approved: true, created_at: at, approved_at: at, source_kind: "seed" }),
       "reset brain",
     );
     return { businessId: SEED_BUSINESS_ID };

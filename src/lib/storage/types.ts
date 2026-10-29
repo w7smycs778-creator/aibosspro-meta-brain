@@ -246,7 +246,8 @@ export interface Storage extends SpendLedgerStore {
    * processed-event ids are kept: wiping them would reset the cap and replay
    * events.
    */
-  reset(): Promise<{ businessId: string }>;
+  /** Wipes business data (the spend ledger and processed events stay) and seeds the demo business with seed (default SEED_BRAIN) as approved v1. */
+  reset(seed?: BusinessBrain): Promise<{ businessId: string }>;
 
   getBusiness(id: string): Promise<Business | null>;
   updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business>;

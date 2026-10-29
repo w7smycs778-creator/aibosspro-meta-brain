@@ -22,9 +22,16 @@ function zoneAbbreviation(instant: Date, tz: string): string {
   );
 }
 
-/** e.g. "Thu, Oct 29, 16:00 IST": wall-clock time in tz with the zone abbreviation. */
-export function formatWithZone(instant: Date | string, tz: string): string {
+/**
+ * e.g. "Thu, Oct 29, 16:00 IST": wall-clock time in tz with the zone abbreviation.
+ * lang "he": "יום שלישי, 3 בנובמבר בשעה 10:00", with the abbreviation only outside Israel.
+ */
+export function formatWithZone(instant: Date | string, tz: string, lang: "en" | "he" = "en"): string {
   const d = new Date(instant);
+  if (lang === "he") {
+    const wall = new Intl.DateTimeFormat("he-IL", { timeZone: tz, weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
+    return tz === "Asia/Jerusalem" ? wall : `${wall} ${zoneAbbreviation(d, tz)}`;
+  }
   const wall = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
