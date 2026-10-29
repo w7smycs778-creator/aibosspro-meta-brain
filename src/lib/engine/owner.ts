@@ -1,8 +1,8 @@
 // Owner actions and the owner screen's view of the store.
 import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage, Turn } from "../storage/types";
 import { channelDeliver, deliverAndRecord, type Deliver, type DeliveryResult } from "./delivery";
-import { startsHebrew } from "./deps";
 import { formatWithZone } from "./display";
+import { brainLangs, detectLanguage, serviceName, STRINGS } from "./i18n";
 
 export type Decision = "approved" | "rejected";
 
@@ -30,18 +30,12 @@ export async function decideBooking(store: Storage, approvalId: string, decision
   const versions = await store.listBrainVersions(approval.businessId);
   const current = versions.find((v) => v.approved)!.brain;
   const booked = brainAt(versions, booking.createdAt)?.brain.services.find((s) => s.id === booking.serviceId);
-  // The reply follows the customer's language: Hebrew when their last message was Hebrew.
+  // The reply follows the customer's language (their last message), else the business's first language.
   const lastCustomer = (await store.listTurns(conversation.id)).filter((t) => t.role === "customer").at(-1);
-  const hebrew = !!lastCustomer && startsHebrew(lastCustomer.content);
-  const service = (hebrew && booked?.localNames?.he) || booked?.name || booking.serviceId;
-  const when = formatWithZone(booking.startsAt, current.timezone, hebrew ? "he" : "en");
-  const replyText = hebrew
-    ? decision === "approved"
-      ? `התור שלך ל${service} ב${when} אושר. נתראה!`
-      : `מצטערים, התור ל${service} ב${when} לא זמין בסוף. לבדוק לך מועד אחר?`
-    : decision === "approved"
-      ? `Good news: your ${service} on ${when} is confirmed. See you then.`
-      : `Sorry, the ${service} on ${when} isn't available after all. Would you like me to check another time?`;
+  const lang = detectLanguage(lastCustomer?.content ?? "", brainLangs(current)[0]);
+  const service = booked ? serviceName(booked, lang) : booking.serviceId;
+  const when = formatWithZone(booking.startsAt, current.timezone, lang);
+  const replyText = decision === "approved" ? STRINGS[lang].approved(service, when) : STRINGS[lang].rejected(service, when);
   const turn = await store.appendTurn({
     conversationId: conversation.id,
     role: "assistant",

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One command for judges: checks Node, creates .env from .env.example if there
 # is none, installs dependencies, seeds the demo business (Cedar Street
-# Barbers) into ./data when no local database exists, and starts the app on
+# Barbers) into ./data when no local database exists, adds the three other
+# demo businesses (idempotent), and starts the app on
 # http://localhost:3000. Local storage only; nothing is deployed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,5 +23,6 @@ if [ ! -d node_modules ]; then
 fi
 
 STORAGE_BACKEND=local npx tsx scripts/demo-reset.ts --if-missing
+STORAGE_BACKEND=local npx tsx scripts/seed-demo-businesses.ts
 echo "Open http://localhost:3000/owner (customer panel, approvals, content) and http://localhost:3000/onboard (brain onboarding)."
 STORAGE_BACKEND=local exec npx next dev --port 3000

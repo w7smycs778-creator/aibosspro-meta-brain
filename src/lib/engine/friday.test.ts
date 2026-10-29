@@ -182,6 +182,7 @@ describe("discount conditions", () => {
         discountId: weekday === "tue" ? "tuesday_combo" : null,
         listPriceCents: 5000,
         quote: weekday === "tue" ? "Cut + beard is $42.50 on Tuesday, normally $50" : "Cut + beard is $50",
+        quotes: {},
       },
       slots: [{ slot: `${date}T10:00`, time: "10:00", startsAt: `${date}T08:00:00.000Z` }],
     },

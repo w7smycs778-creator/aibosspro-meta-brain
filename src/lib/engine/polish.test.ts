@@ -64,14 +64,15 @@ const call = (name: string, args: Record<string, unknown> = {}): ScriptedStep =>
 
 describe("discounted price quote", () => {
   it("is computed by code: ₪102 on a Tuesday with the normal price, list price on other days", () => {
-    expect(priceQuote(CEDAR_BRAIN, CUT_BEARD, "tue")).toEqual({
+    expect(priceQuote(CEDAR_BRAIN, CUT_BEARD, "tue")).toMatchObject({
       priceCents: 10_200,
       currency: "ILS",
       discountId: "discount_1",
       listPriceCents: 12_000,
       quote: "Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)",
     });
-    expect(priceQuote(CEDAR_BRAIN, CUT_BEARD, "wed")).toEqual({
+    expect(priceQuote(CEDAR_BRAIN, CUT_BEARD, "tue").quotes.he).toBe("תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120");
+    expect(priceQuote(CEDAR_BRAIN, CUT_BEARD, "wed")).toMatchObject({
       priceCents: 12_000,
       currency: "ILS",
       discountId: null,
@@ -139,7 +140,8 @@ describe("Hebrew", () => {
     const p = brainFacts(CEDAR_BRAIN, 1);
     expect(p).toContain("Languages: English, Hebrew.");
     expect(p).toContain("- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min");
-    expect(p).toContain("In Hebrew: use the Hebrew service names");
+    expect(p).toContain("In Hebrew: write prices with digits as listed");
+    expect(p).toContain("Use each service's name exactly as listed for the reply's language");
     expect(brainFacts({ ...CEDAR_BRAIN, languages: ["en", "he"] }, 1)).toContain("Languages: English, Hebrew.");
   });
 

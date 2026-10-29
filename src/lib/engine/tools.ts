@@ -5,16 +5,13 @@ import type { ToolContext, ToolSpec } from "../gateway/tools";
 import { SlotTakenError } from "../storage/errors";
 import { formatMoney } from "./brain-prompt";
 import { priceOn } from "./discounts";
+import { brainLangs, dayName, serviceName, STRINGS, type Lang } from "./i18n";
 import type { BusinessBrain, Service, Weekday } from "../storage/types";
 import { formatLocal, hhmm, localDate, localToUtc, minutes, weekdayOf } from "./time";
 
 export const SLOT_STEP_MIN = 30;
 
 export type Slot = { slot: string; time: string; startsAt: string };
-
-const DAY_FULL: Record<Weekday, string> = {
-  sun: "Sunday", mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday",
-};
 
 /** What the customer is told about the price on this date, computed here so the model never does price arithmetic. */
 export type PriceQuote = {
@@ -23,8 +20,10 @@ export type PriceQuote = {
   discountId: string | null;
   /** The service's list price; differs from priceCents only when a discount applies. */
   listPriceCents: number;
-  /** e.g. "Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)". */
+  /** In the brain's first language, e.g. "Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)". */
   quote: string;
+  /** The same quote in each of the brain's languages, keyed by language code. */
+  quotes: Partial<Record<Lang, string>>;
 };
 
 export type AvailabilityResult = {
@@ -55,10 +54,18 @@ export function priceQuote(brain: BusinessBrain, service: Service, weekday: Week
   const { priceCents, discountId } = priceOn(brain, service, weekday);
   const currency = service.currency || brain.currency;
   const rule = discountId ? brain.discounts.find((d) => d.id === discountId) : undefined;
-  const quote = rule
-    ? `${service.name} is ${formatMoney(priceCents, currency)} on ${DAY_FULL[weekday]}, normally ${formatMoney(service.priceCents, currency)} (${rule.description})`
-    : `${service.name} is ${formatMoney(priceCents, currency)}`;
-  return { priceCents, currency, discountId, listPriceCents: service.priceCents, quote };
+  const price = formatMoney(priceCents, currency);
+  const normal = formatMoney(service.priceCents, currency);
+  const langs = brainLangs(brain);
+  const quotes: Partial<Record<Lang, string>> = {};
+  for (const lang of langs) {
+    const name = serviceName(service, lang);
+    const t = STRINGS[lang];
+    // The rule's description is in the owner's words, so only the first language's quote carries it.
+    const why = rule && lang === langs[0] ? ` (${rule.description})` : "";
+    quotes[lang] = rule ? `${t.quote(name, price, dayName(weekday, lang), normal)}${why}` : t.plainQuote(name, price);
+  }
+  return { priceCents, currency, discountId, listPriceCents: service.priceCents, quote: quotes[langs[0]]!, quotes };
 }
 
 /** Open slots for service on date: weekly hours minus pending and confirmed bookings, future only. */
@@ -119,7 +126,7 @@ export const getHoursTool: ToolSpec = {
 export const checkAvailabilityTool: ToolSpec = {
   name: "check_availability",
   description:
-    "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quote, which includes any discount for that day.",
+    "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
   parameters: {
     type: "object",
     properties: {

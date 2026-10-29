@@ -112,6 +112,24 @@ export class SupabaseStore implements Storage {
     return r ? { id: r.id, name: r.name, createdAt: r.created_at, whatsappDefaultMode: r.whatsapp_default_mode ?? "HUMAN" } : null;
   }
 
+  async listBusinesses(): Promise<Business[]> {
+    const rows = check(await this.db.from("businesses").select("*").order("created_at").order("id"), "listBusinesses") as Row[];
+    return rows.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, whatsappDefaultMode: r.whatsapp_default_mode ?? "HUMAN" }));
+  }
+
+  async ensureBusiness(input: { id: string; name: string; whatsappDefaultMode?: ConversationMode }): Promise<Business> {
+    check(
+      await this.db
+        .from("businesses")
+        .upsert(
+          { id: input.id, name: input.name, created_at: new Date().toISOString(), whatsapp_default_mode: input.whatsappDefaultMode ?? "HUMAN" },
+          { onConflict: "id", ignoreDuplicates: true },
+        ),
+      "ensureBusiness",
+    );
+    return (await this.getBusiness(input.id))!;
+  }
+
   async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
     check(await this.db.from("businesses").update({ whatsapp_default_mode: settings.whatsappDefaultMode }).eq("id", id), "updateBusinessSettings");
     const b = await this.getBusiness(id);

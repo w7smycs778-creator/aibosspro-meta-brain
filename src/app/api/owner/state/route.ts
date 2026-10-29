@@ -1,15 +1,18 @@
 import { liveInferenceStatus } from "@/lib/gateway";
 import { getStore } from "@/lib/storage";
-import { SEED_BUSINESS_ID } from "@/lib/storage/seed";
 import { ownerState } from "@/lib/engine/owner";
-import { json, ownerOnly } from "@/lib/engine/http";
+import { json, ownerOnly, resolveBusiness } from "@/lib/engine/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+/** ?business=<id> selects the business (default: the original demo business). */
+export async function GET(req: Request): Promise<Response> {
   const blocked = ownerOnly();
   if (blocked) return blocked;
   const store = await getStore();
-  return json({ ...(await ownerState(store, SEED_BUSINESS_ID)), inference: await liveInferenceStatus(process.env, store) });
+  const businessId = await resolveBusiness(store, new URL(req.url).searchParams.get("business"));
+  if (businessId instanceof Response) return businessId;
+  const businesses = (await store.listBusinesses()).map((b) => ({ id: b.id, name: b.name }));
+  return json({ ...(await ownerState(store, businessId)), businesses, inference: await liveInferenceStatus(process.env, store) });
 }

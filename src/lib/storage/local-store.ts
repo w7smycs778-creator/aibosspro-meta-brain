@@ -263,6 +263,17 @@ export class LocalStore implements Storage {
     return r ? toBusiness(r) : null;
   }
 
+  async listBusinesses(): Promise<Business[]> {
+    return (this.db.prepare("select * from businesses order by created_at, id").all() as Row[]).map(toBusiness);
+  }
+
+  async ensureBusiness(input: { id: string; name: string; whatsappDefaultMode?: ConversationMode }): Promise<Business> {
+    this.db
+      .prepare("insert into businesses (id, name, created_at, whatsapp_default_mode) values (?, ?, ?, ?) on conflict (id) do nothing")
+      .run(input.id, input.name, now(), input.whatsappDefaultMode ?? "HUMAN");
+    return (await this.getBusiness(input.id))!;
+  }
+
   async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
     const res = this.db.prepare("update businesses set whatsapp_default_mode = ? where id = ?").run(settings.whatsappDefaultMode, id);
     if (res.changes === 0) throw new Error(`business ${id} not found`);

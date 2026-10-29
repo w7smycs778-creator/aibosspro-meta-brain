@@ -14,6 +14,7 @@ type OwnerState = {
   approvals?: Array<{ id: string; conversationId: string | null; booking: null | { serviceName: string; when: string; customerName: string | null; customerContact: string | null } }>;
   bookings?: Array<{ id: string; serviceName: string; when: string; status: string; customerName: string | null }>;
   inference?: { live: boolean; reason: string | null };
+  businesses?: Array<{ id: string; name: string }>;
 };
 type PanelMessage = { who: "customer" | "assistant" | "owner"; text: string; outcome?: string; trace?: Turn[] };
 
@@ -36,15 +37,31 @@ export function OwnerScreen() {
   const [draft, setDraft] = useState("");
   const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  // The business on screen; kept in ?business= so a reload or a shared link opens the same one.
+  const [businessId, setBusinessId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBusinessId(new URLSearchParams(window.location.search).get("business") ?? "");
+  }, []);
 
   const refresh = useCallback(async () => {
-    setState(await (await fetch("/api/owner/state")).json());
-  }, []);
+    if (businessId === null) return;
+    setState(await (await fetch(`/api/owner/state${businessId ? `?business=${encodeURIComponent(businessId)}` : ""}`)).json());
+  }, [businessId]);
 
   useEffect(() => {
     setSessionId(`panel-${crypto.randomUUID()}`);
+    setPanelConversationId(null);
+    setMessages([]);
     void refresh();
   }, [refresh]);
+
+  function switchBusiness(id: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("business", id);
+    window.history.replaceState(null, "", url);
+    setBusinessId(id);
+  }
 
   async function send() {
     const text = draft.trim();
@@ -53,7 +70,7 @@ export function OwnerScreen() {
     setDraft("");
     setMessages((m) => [...m, { who: "customer", text }]);
     try {
-      const r = await post("/api/panel/message", { sessionId, eventId: crypto.randomUUID(), text });
+      const r = await post("/api/panel/message", { sessionId, eventId: crypto.randomUUID(), text, ...(businessId && { businessId }) });
       if (r.conversationId) setPanelConversationId(r.conversationId);
       setMessages((m) => [
         ...m,
@@ -108,7 +125,27 @@ export function OwnerScreen() {
       <section className="space-y-4">
         <div className="rounded border bg-white p-3">
           <div className="flex items-center justify-between">
-            <h1 className="text-lg font-semibold">{state?.business ? state.businessName ?? state.business.name : "No business yet"}</h1>
+            <h1 className="text-lg font-semibold">
+              {state?.businesses && state.businesses.length > 1 ? (
+                <select
+                  aria-label="Business"
+                  dir="auto"
+                  className="rounded border px-1 py-0.5"
+                  value={state.business?.id ?? ""}
+                  onChange={(e) => switchBusiness(e.target.value)}
+                >
+                  {state.businesses.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              ) : state?.business ? (
+                (state.businessName ?? state.business.name)
+              ) : (
+                "No business yet"
+              )}
+            </h1>
             <span className="space-x-2">
               <a href="/onboard" className="rounded border px-2 py-1 hover:bg-gray-100">
                 Onboarding / brain review
@@ -198,7 +235,7 @@ export function OwnerScreen() {
           </ul>
         </div>
 
-        <ContentSection />
+        <ContentSection businessId={state?.business?.id ?? null} />
 
         <div className="rounded border bg-white p-3">
           <h2 className="mb-2 font-semibold">Bookings</h2>

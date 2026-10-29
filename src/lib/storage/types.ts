@@ -250,6 +250,10 @@ export interface Storage extends SpendLedgerStore {
   reset(seed?: BusinessBrain): Promise<{ businessId: string }>;
 
   getBusiness(id: string): Promise<Business | null>;
+  /** Every business, oldest first. */
+  listBusinesses(): Promise<Business[]>;
+  /** Creates the business when it does not exist (whatsappDefaultMode only applies then); returns it either way. */
+  ensureBusiness(input: { id: string; name: string; whatsappDefaultMode?: ConversationMode }): Promise<Business>;
   updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business>;
   /** Stores the next version, unapproved. */
   addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion>;

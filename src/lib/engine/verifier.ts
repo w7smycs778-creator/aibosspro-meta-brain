@@ -29,6 +29,9 @@ const LEAK_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:I'?ll|I will|let me|I'?m going to|I am going to)\s+(?:check|look up|look into|find out|verify|get back)\b/i, "promises a lookup instead of calling the tool"],
   // Hebrew: "I'll check", "I'll find out", "I'll get back to you", "let me check".
   [/(?<!\p{L})(?:אבדוק|אברר|אחזור אלי(?:ך|יך|כם)|(?:תן|תני|תנו) לי (?:לבדוק|לברר))(?!\p{L})/u, "promises a lookup instead of calling the tool"],
+  // Spanish: "voy a revisar", "déjame verificar", "lo reviso", "te confirmo luego"; French: "je vais vérifier", "laissez-moi vérifier", "je reviens vers vous".
+  [/(?<!\p{L})(?:voy a (?:revisar|verificar|consultar|comprobar|checar)|d[ée]jame (?:revisar|verificar|consultar|comprobar|checar)|(?:revisar[ée]|verificar[ée]|consultar[ée])|lo reviso|te (?:confirmo|aviso) (?:luego|después|despues|más tarde))(?!\p{L})/iu, "promises a lookup instead of calling the tool"],
+  [/(?<!\p{L})(?:je vais (?:vérifier|verifier|regarder|consulter)|laissez-moi (?:vérifier|verifier|regarder)|je (?:vérifie|verifie|regarde) (?:et|puis)|je reviens vers vous|je vous recontacte)(?!\p{L})/iu, "promises a lookup instead of calling the tool"],
   [/\btool[ _]?calls?\b|\bschema\b|\bjson\b|\bformat requires\b|\bdeveloper\b/i, "talks about the tool protocol"],
   [/"type"\s*:|\{\s*"/, "contains a JSON fragment"],
 ];
@@ -60,8 +63,11 @@ export function latestAvailability(turns: Turn[]): AvailabilityResult | null {
   return null;
 }
 
-/** "$35", "₪120", "35 USD", "120 ₪", "120 NIS", "120 shekels", "120 ש״ח", "120 שקלים". */
-const PRICE_RE = /([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?|ILS|NIS|shekels?|₪|€|£|ש["״]ח|שקלים|שקל)(?![\p{L}\d])/giu;
+/** "$35", "₪120", "35 USD", "120 ₪", "120 NIS", "120 shekels", "120 ש״ח", "120 שקלים", "100 $ CA", "45 dólares". */
+const PRICE_RE = /([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|CAD|dollars?|d[óo]lares|d[óo]lar|ILS|NIS|shekels?|₪|€|£|\$|ש["״]ח|שקלים|שקל)(?![\p{L}\d])/giu;
+
+/** Words after an amount that make it a discount amount: off, de descuento, de rabais, de réduction, הנחה. */
+const OFF_AFTER = /^\s*(?:off|discount|de descuento|descuento|de rabais|de r[ée]duction|de remise|הנחה)(?!\p{L})/iu;
 
 /** Max gap between a service name and the price bound to it. */
 const BIND_WINDOW = 60;
@@ -78,6 +84,14 @@ const HE_CLAIM_RE = /(?<!\p{L})[וה]?(?:אושר|אושרה|מאושר|מאוש
 const HE_NEGATION_BEFORE =
   /(?<!\p{L})(?:ו?(?:לא|טרם|עדיין|ממתין|ממתינה|ממתינים|מחכה|מחכים|בהמתנה|אחרי|לאחר|כאשר|ברגע|עד|אם|רק|יאשר|תאשר|שיאשר|שתאשר|יאושר|תאושר|שיאושר|שתאושר)|כש\p{L}*)(?!\p{L})/u;
 const HE_CONDITION_AFTER = /^[\s,:–-]*(?:עד|אחרי|לאחר|כש|ברגע|רק|בכפוף|ממתין|בהמתנה|לאישור)/u;
+/** Spanish claims: confirmado/a, reservado/a, agendado/a, apartado/a, "te confirmo", "te reservé" ("¿te reserve?" is an offer). */
+const ES_CLAIM_RE = /(?<!\p{L})(?:confirmad[oa]s?|reservad[oa]s?|agendad[oa]s?|apartad[oa]s?|confirmo|reservé)(?!\p{L})/giu;
+const ES_NEGATION_BEFORE = /(?<!\p{L})(?:no|todav[íi]a|a[úu]n|pendiente|cuando|hasta|despu[ée]s|una vez|en cuanto|antes|s[óo]lo)(?!\p{L})/iu;
+const ES_CONDITION_AFTER = /^[\s,:–-]*(?:cuando|hasta|una vez|en cuanto|despu[ée]s|tras|pendiente|por (?:el|la) (?:due[ñn]o|due[ñn]a|propietari[oa]|negocio|equipo))(?!\p{L})/iu;
+/** French claims: confirmé(e)(s), réservé(e)(s). "Je réserve?" and "je confirme?" are offers, not claims. */
+const FR_CLAIM_RE = /(?<!\p{L})(?:confirmée?s?|r[ée]servée?s?)(?!\p{L})/giu;
+const FR_NEGATION_BEFORE = /(?<!\p{L})(?:ne|pas|non|encore|quand|lorsque|d[èe]s|une fois|apr[èe]s|avant|attente|seulement)(?!\p{L})|(?<!\p{L})(?:n|lorsqu|jusqu)'/iu;
+const FR_CONDITION_AFTER = /^[\s,:–-]*(?:quand|lorsque|lorsqu'|d[èe]s|une fois|apr[èe]s|par (?:le|la) (?:propri[ée]taire|clinique|[ée]quipe)|en attente|sous r[ée]serve)(?!\p{L})/iu;
 
 function escape(re: string): string {
   return re.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -115,6 +129,14 @@ const HE_DAYS: Record<string, Weekday> = { ראשון: "sun", שני: "mon", ש�
  */
 const HE_DAY_RE = /(?<!\p{L})(?:ו?[בלה]?(?:יום|ימי)\s+(ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|ו?ב?(שלישי|רביעי|חמישי|שישי|שבת))(?!\p{L})/gu;
 
+/** Spanish and French weekday names (singular or plural, accents optional). */
+const LATIN_DAYS: Record<string, Weekday> = {
+  lunes: "mon", martes: "tue", miercoles: "wed", jueves: "thu", viernes: "fri", sabado: "sat", sabados: "sat", domingo: "sun", domingos: "sun",
+  lundi: "mon", lundis: "mon", mardi: "tue", mardis: "tue", mercredi: "wed", mercredis: "wed", jeudi: "thu", jeudis: "thu",
+  vendredi: "fri", vendredis: "fri", samedi: "sat", samedis: "sat", dimanche: "sun", dimanches: "sun",
+};
+const LATIN_DAY_RE = /(?<!\p{L})(lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bados?|domingos?|lundis?|mardis?|mercredis?|jeudis?|vendredis?|samedis?|dimanches?)(?!\p{L})/giu;
+
 function dayMentions(text: string): Array<{ day: Weekday; index: number }> {
   const out: Array<{ day: Weekday; index: number }> = [];
   for (const m of text.matchAll(DAY_RE)) {
@@ -122,6 +144,7 @@ function dayMentions(text: string): Array<{ day: Weekday; index: number }> {
     else if (/^[A-Z]/.test(m[2])) out.push({ day: DAY_NAMES[m[2]], index: m.index! });
   }
   for (const m of text.matchAll(HE_DAY_RE)) out.push({ day: HE_DAYS[m[1] ?? m[2]], index: m.index! });
+  for (const m of text.matchAll(LATIN_DAY_RE)) out.push({ day: LATIN_DAYS[m[1].toLowerCase().normalize("NFD").replace(/\p{M}/gu, "")], index: m.index! });
   return out;
 }
 
@@ -231,6 +254,19 @@ export function verifyText(text: string, facts: Facts): Verdict {
       checks.push({ rule: "price", claim, pass: false, detail: `${money(cents)} is not a listed or discounted price` });
       return;
     }
+    // A fixed discount amount stated as such ("$30 off", "$30 de descuento"): check the rule and its day, not a service price.
+    const offRules = brain.discounts.filter((d) => d.amountOffCents === cents);
+    if (offRules.length && OFF_AFTER.test(text.slice(priceSpans[i].end, priceSpans[i].end + 25))) {
+      const day = dayContext(text, m.index!, facts);
+      const holds = !day || offRules.some((r) => ruleHoldsOn(r, day));
+      checks.push({
+        rule: "discount",
+        claim: `${claim} off${day ? ` on ${day}` : ""}`,
+        pass: holds,
+        ...(!holds && { detail: `${claim} off holds on ${offRules.flatMap((r) => r.weekdays).join("/")} only, not ${day}` }),
+      });
+      return;
+    }
     const id = boundService(text, priceSpans[i], names, priceSpans);
     if (!id) {
       checks.push({ rule: "price", claim, pass: true, inconclusive: true, detail: "listed price with no unambiguous service; for owner review" });
@@ -260,7 +296,7 @@ export function verifyText(text: string, facts: Facts): Verdict {
     });
   });
 
-  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?(?:%|אחוזים|אחוז(?!\p{L}))/gu)) {
+  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?(?:%|אחוזים|אחוז(?!\p{L})|por ciento|pour cent|pourcent)/giu)) {
     const rules = brain.discounts.filter((d) => d.percentOff === Number(m[1]));
     if (rules.length === 0) {
       checks.push({ rule: "discount", claim: m[0], pass: false, detail: `no ${m[0]} discount in the approved brain` });
@@ -278,7 +314,7 @@ export function verifyText(text: string, facts: Facts): Verdict {
   }
 
   const durations = new Set(brain.services.map((s) => s.durationMin));
-  for (const m of text.matchAll(/\b(\d+)\s?(?:min|mins|minutes)\b|\b(\d+)\s?(?:דקות|דקה|דק['׳])/giu)) {
+  for (const m of text.matchAll(/\b(\d+)\s?(?:min|mins|minutes|minutos)\b|\b(\d+)\s?(?:דקות|דקה|דק['׳])/giu)) {
     const n = m[1] ?? m[2];
     const ok = durations.has(Number(n));
     checks.push({ rule: "duration", claim: m[0], pass: ok, ...(!ok && { detail: `no service lasts ${n} minutes` }) });
@@ -288,10 +324,21 @@ export function verifyText(text: string, facts: Facts): Verdict {
   const boundaries = new Set(Object.values(brain.hours).flat().flat());
   const slotTimes = new Set((facts.availability?.slots ?? []).map((s) => s.time));
   const seen = new Set<number>();
-  for (const m of text.matchAll(/\b(\d{1,2}):(\d{2})\s?(am|pm)?\b|\b(\d{1,2})\s?(am|pm)\b/gi)) {
+  // "10:00", "10am"; French "à 10h", "de 8 h 30"; Spanish "a las 10". The French and Spanish hour-only forms
+  // need the preposition, so a duration such as "1 h 30" is not read as a time.
+  const TIME_RE =
+    /\b(\d{1,2}):(\d{2})\s?(am|pm)?\b|\b(\d{1,2})\s?(am|pm)\b|(?<!\p{L})(?:à|a|de|dès|vers|jusqu'à|entre|et|avant|après)\s+(\d{1,2})\s?h\s?(\d{2})?(?![\p{L}\d])|(?<!\p{L})a las? (\d{1,2})(?![\d:])/giu;
+  for (const m of text.matchAll(TIME_RE)) {
     if (seen.has(m.index!)) continue;
     seen.add(m.index!);
-    const t = m[1] !== undefined ? normaliseTime(m[1], m[2], m[3]) : normaliseTime(m[4], undefined, m[5]);
+    const t =
+      m[1] !== undefined
+        ? normaliseTime(m[1], m[2], m[3])
+        : m[4] !== undefined
+          ? normaliseTime(m[4], undefined, m[5])
+          : m[6] !== undefined
+            ? normaliseTime(m[6], m[7], undefined)
+            : normaliseTime(m[8], undefined, undefined);
     if (!t) continue;
     const ok = boundaries.has(t) || slotTimes.has(t);
     checks.push({
@@ -306,6 +353,8 @@ export function verifyText(text: string, facts: Facts): Verdict {
   const claims = [
     ...[...text.matchAll(/\b(confirmed|booked|reserved|all set)\b/gi)].map((m) => ({ m, negation: NEGATION_BEFORE, condition: CONDITION_AFTER })),
     ...[...text.matchAll(HE_CLAIM_RE)].map((m) => ({ m, negation: HE_NEGATION_BEFORE, condition: HE_CONDITION_AFTER })),
+    ...[...text.matchAll(ES_CLAIM_RE)].map((m) => ({ m, negation: ES_NEGATION_BEFORE, condition: ES_CONDITION_AFTER })),
+    ...[...text.matchAll(FR_CLAIM_RE)].map((m) => ({ m, negation: FR_NEGATION_BEFORE, condition: FR_CONDITION_AFTER })),
   ];
   for (const { m, negation, condition } of claims) {
     const before = text.slice(Math.max(0, m.index! - CLAIM_WINDOW), m.index!);
