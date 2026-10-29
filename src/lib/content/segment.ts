@@ -1,12 +1,15 @@
-// SAM 3.1 cutout. The API documents the output only as "special-token text,
-// one box + mask per match". Observed live (fixtures/sam/mug-output.txt):
-//   <0f>0<|box;x1=230;y1=155;x2=470;y2=370;w=640;h=480|><|mask;x=0;y=0;data=216,241,<encoded>|>
-// The box is in pixels of a w x h image. The mask is box-local (216 x 241 for
-// that box) in an encoding that matches no standard base-N + zlib scheme, so it
-// is recorded but not decoded. The parser also accepts JSON with a base64 PNG
-// or COCO run-length mask, in case another response shape appears. A decoded
-// mask becomes the alpha channel; a box alone becomes a crop with a soft
-// vignette; nothing usable means the caller falls back to the framed original.
+// SAM 3.1 cutout. Output grammar, per https://dev.meta.ai/docs/sam/reading-segmentation
+// (saved in research/SAM-DOCS-2026-10-29.md):
+//   <Nf>id<|box;x1=..;y1=..;x2=..;y2=..;w=<frameW>;h=<frameH>[;c=<conf>]|><|mask;x=0;y=0[;c=<conf>];data=<H>,<W>,<enc>payload|>
+//   ENC ::= "~" (lossless, default) | "!" (one_bit); PAYLOAD ::= base85 bytes, which may contain "~", "!" or "|".
+// The docs leave the byte format to the official parser, so records and masks
+// come from @meta-sam/parser (parseImageStream + decodeMaskToRaster, a
+// row-major 0/1 raster of H x W covering the record's box). A decoded mask
+// becomes the alpha channel; a box alone becomes a crop with a soft vignette;
+// nothing usable means the caller falls back to the framed original. JSON with
+// a base64 PNG or COCO run-length mask is still accepted in case another
+// response shape appears.
+import { decodeMaskToRaster, parseImageStream, recordsOfKind } from "@meta-sam/parser";
 import sharp from "sharp";
 
 export type Box = [x1: number, y1: number, x2: number, y2: number];
@@ -16,9 +19,21 @@ export type Segmentation = {
   /** Box in pixels of the image sent. */
   box: Box | null;
   format: string;
-  /** A mask token was present but its encoding could not be decoded. */
-  undecodedMask?: { width: number; height: number; length: number };
+  /** Decoded box-local SAM mask: row-major 0/1, height x width, covering `box`. */
+  boxMask?: { raster: Uint8Array; width: number; height: number };
+  /** A mask token was present but could not be decoded (reason recorded). */
+  undecodedMask?: { width: number; height: number; length: number; reason?: string };
 };
+
+/** Records from SAM's special-token text via the official parser (the saved text replayed as a finished stream). */
+async function samRecords(text: string) {
+  async function* events() {
+    yield { type: "response.output_text.done" as const, item_id: "saved", output_index: 0, content_index: 0, text };
+    yield { type: "response.completed" as const };
+  }
+  const result = await parseImageStream(events()).finalResult;
+  return { boxes: recordsOfKind(result.records, "box"), masks: recordsOfKind(result.records, "mask"), diagnostics: result.diagnostics };
+}
 
 /** Byte-free description of a model output for logs: length, JSON keys, tokens, a head with long base64 runs elided. */
 export function describeOutput(raw: string | undefined): Record<string, unknown> {
@@ -151,19 +166,50 @@ function collectStrings(v: unknown): string[] {
 }
 
 async function parseTokens(text: string, w: number, h: number): Promise<Segmentation> {
-  // SAM 3.1 key=value tokens, as observed live.
+  if (text.includes("<|box;")) {
+    try {
+      const { boxes, masks } = await samRecords(text);
+      const mask = masks[0];
+      const record = mask ?? boxes[0];
+      if (record) {
+        const b = mask ? mask.bounds : { left: boxes[0].left, top: boxes[0].top, right: boxes[0].right, bottom: boxes[0].bottom };
+        // Box corners are pixels of the frame SAM saw (w x h in the box token); scale them to the image given here.
+        const frame = text.match(/<\|box;[^|]*?w=(\d+);h=(\d+)/);
+        const fx = frame ? w / Number(frame[1]) : 1;
+        const fy = frame ? h / Number(frame[2]) : 1;
+        const box = toBox([b.left * fx, b.top * fy, b.right * fx, b.bottom * fy], w, h);
+        if (mask) {
+          try {
+            const raster = decodeMaskToRaster(mask.mask);
+            return { alpha: null, box, format: `sam-tokens+${mask.mask.encoding}-mask`, boxMask: { raster, width: mask.mask.width, height: mask.mask.height } };
+          } catch (err) {
+            return {
+              alpha: null,
+              box,
+              format: "sam-tokens+box",
+              undecodedMask: { width: mask.mask.width, height: mask.mask.height, length: mask.mask.payload.length, reason: (err as Error).message },
+            };
+          }
+        }
+        return { alpha: null, box, format: "sam-tokens+box" };
+      }
+    } catch {
+      // Fall through to the key=value box reader below.
+    }
+  }
+  // SAM 3.1 key=value box token, when the official parser rejected the text.
   const kvBox = text.match(/<\|box;([^|]*)\|>/);
   if (kvBox) {
     const f = Object.fromEntries(kvBox[1].split(";").map((p) => p.split("=") as [string, string]));
     const refW = Number(f.w) || w;
     const refH = Number(f.h) || h;
     const box = toBox([Number(f.x1) * (w / refW), Number(f.y1) * (h / refH), Number(f.x2) * (w / refW), Number(f.y2) * (h / refH)], w, h);
-    const kvMask = text.match(/<\|mask;[^|]*?data=(\d+),(\d+),([^|]*)\|>/);
+    const kvMask = text.match(/<\|mask;[^|]*?data=(\d+),(\d+),/);
     return {
       alpha: null,
       box,
       format: box ? "sam-tokens+box" : "sam-tokens-unrecognised",
-      ...(kvMask && { undecodedMask: { height: Number(kvMask[1]), width: Number(kvMask[2]), length: kvMask[3].length } }),
+      ...(kvMask && { undecodedMask: { height: Number(kvMask[1]), width: Number(kvMask[2]), length: 0, reason: "the official parser rejected the text" } }),
     };
   }
   const maskToken = text.match(/<\|?mask[^>]*\|?>\s*([A-Za-z0-9+/=]{100,})/i);
@@ -218,6 +264,32 @@ export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buf
     seg = { ...seg, alpha: await sharp(seg.alpha, { raw: { width: sw!, height: sh!, channels: 1 } }).resize(ow!, oh!, { fit: "fill" }).raw().toBuffer() };
   }
   if (seg.box) seg = { ...seg, box: [seg.box[0] * sx, seg.box[1] * sy, seg.box[2] * sx, seg.box[3] * sy] };
+  if (seg.boxMask && seg.box) {
+    // The decoded mask covers the box: crop the box from the original, scale the
+    // mask to it, feather the edge by 2 px, use it as the alpha channel.
+    const [x1, y1, x2, y2] = seg.box.map(Math.round);
+    const left = Math.max(0, x1);
+    const top = Math.max(0, y1);
+    const cw = Math.min(w!, x2) - left;
+    const ch = Math.min(h!, y2) - top;
+    const m = seg.boxMask;
+    const on = m.raster.reduce((n, v) => n + v, 0) / m.raster.length;
+    if (on >= 0.02) {
+      const mask255 = Buffer.from(m.raster.map((v) => (v ? 255 : 0)));
+      const alpha = await sharp(mask255, { raw: { width: m.width, height: m.height, channels: 1 } }).resize(cw, ch, { fit: "fill", kernel: "cubic" }).blur(2).raw().toBuffer();
+      const rgb = await sharp(image).extract({ left, top, width: cw, height: ch }).removeAlpha().toColourspace("srgb").raw().toBuffer();
+      const rgba = Buffer.alloc(cw * ch * 4);
+      for (let i = 0; i < cw * ch; i++) {
+        rgba[i * 4] = rgb[i * 3];
+        rgba[i * 4 + 1] = rgb[i * 3 + 1];
+        rgba[i * 4 + 2] = rgb[i * 3 + 2];
+        rgba[i * 4 + 3] = alpha[i];
+      }
+      const png = await sharp(rgba, { raw: { width: cw, height: ch, channels: 4 } }).png().toBuffer();
+      return { png, kind: "mask", reason: `SAM mask ${m.height}x${m.width} decoded, ${(on * 100).toFixed(1)}% of the box, scaled to ${cw}x${ch} with a 2 px feather` };
+    }
+    seg = { ...seg, boxMask: undefined, undecodedMask: { width: m.width, height: m.height, length: 0, reason: `mask covers only ${(on * 100).toFixed(1)}% of the box` } };
+  }
   if (seg.alpha) {
     const c = coverage(seg.alpha);
     if (c >= 0.01 && c <= 0.9) {
@@ -245,7 +317,9 @@ export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buf
     const left = Math.max(0, x1);
     const top = Math.max(0, y1);
     const crop = await sharp(image).extract({ left, top, width: Math.min(w!, x2) - left, height: Math.min(h!, y2) - top }).png().toBuffer();
-    const why = seg.undecodedMask ? `box crop with soft vignette; mask returned (${seg.undecodedMask.width}x${seg.undecodedMask.height}) in an undocumented encoding` : "box crop with soft vignette; no mask";
+    const why = seg.undecodedMask
+      ? `box crop with soft vignette; mask ${seg.undecodedMask.height}x${seg.undecodedMask.width} not used (${seg.undecodedMask.reason ?? "not decoded"})`
+      : "box crop with soft vignette; no mask";
     return { png: await vignette(crop), kind: "box", reason: why };
   }
   return { png: await sharp(image).png().toBuffer(), kind: "unavailable", reason: `no mask or box (${seg.format})` };

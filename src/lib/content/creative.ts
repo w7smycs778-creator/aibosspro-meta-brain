@@ -81,6 +81,11 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
   if (deps.gateway) {
     const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: String(diagnostics.object), image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: input.businessId });
     diagnostics.segmentation = { outcome: r.outcome, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
+    if (r.outcome === "ok" && r.output) {
+      // The full output is kept locally so a mask can be decoded again without another call.
+      writeFileSync(join(dir, "sam-output.json"), r.output);
+      (diagnostics.segmentation as Record<string, unknown>).savedOutput = join(dir, "sam-output.json");
+    }
     if (r.outcome === "ok") {
       const seg = await parseSegmentation(r.output, sw!, sh!);
       const cut = await buildCutout(sent, seg, original);
@@ -167,6 +172,10 @@ export async function regenerateCreative(deps: EngineDeps, creativeId: string, o
     const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: opts.object, image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: creative.businessId });
     diagnostics.object = opts.object;
     diagnostics.segmentation = { outcome: r.outcome, sent: `${sw}x${sh}`, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
+    if (r.outcome === "ok" && r.output) {
+      writeFileSync(join(dir, "sam-output.json"), r.output);
+      (diagnostics.segmentation as Record<string, unknown>).savedOutput = join(dir, "sam-output.json");
+    }
     if (r.outcome === "ok") {
       const seg = await parseSegmentation(r.output, sw!, sh!);
       const cut = await buildCutout(sent, seg, original);
@@ -201,6 +210,18 @@ export async function regenerateCreative(deps: EngineDeps, creativeId: string, o
     caption,
     captionLog,
   });
+}
+
+/** Re-runs the caption check on a creative's current caption (no model call) and records the result. */
+export async function reverifyCaption(store: Storage, creativeId: string): Promise<{ creative: Creative; pass: boolean; checks: unknown[] }> {
+  const creative = await store.getCreative(creativeId);
+  if (!creative) throw new ContentError("creative not found", 404);
+  const brain = (await store.listBrainVersions(creative.businessId)).find((v) => v.version === creative.brainVersion)?.brain;
+  const offer = brain ? findOffer(brain, creative.offerId) : null;
+  if (!brain || !offer) throw new ContentError("the creative's brain version or offer is gone", 409);
+  const verdict = verifyCaption(creative.caption, brain, offer);
+  const log = { ...(creative.captionLog ?? {}), reverified: { at: new Date().toISOString(), ...verdict } };
+  return { creative: await store.updateCreativeCaption(creativeId, creative.caption, log), ...verdict };
 }
 
 /** Owner edits the caption: saved as written, with the verifier's result recorded alongside. */

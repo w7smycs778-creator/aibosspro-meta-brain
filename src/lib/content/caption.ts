@@ -28,7 +28,21 @@ function escape(re: string): string {
  */
 export function verifyCaption(text: string, brain: BusinessBrain, offer: Offer): { pass: boolean; checks: Check[] } {
   const base = verifyText(text, { brain, availability: null, bookings: [] });
-  const checks: Check[] = [...base.checks];
+  // "normally <list price>" in the same sentence as this offer's discounted price is the offer's own list price.
+  const tied = new Set<string>();
+  if (offer.kind === "discount") {
+    for (const sentence of text.split(/(?<=[.!?])\s+|\n/)) {
+      if (!sentence.includes(offer.priceText)) continue;
+      for (const m of sentence.matchAll(/\b(?:normally|usually|regularly|instead of|was)\s+([$₪€£]\s?\d+(?:[.,]\d{1,2})?)/gi)) {
+        if (Math.round(Number(m[1].replace(/[^\d.,]/g, "").replace(",", ".")) * 100) === offer.listPriceCents) tied.add(m[1].replace(/\s/g, ""));
+      }
+    }
+  }
+  const checks: Check[] = base.checks.map((c) =>
+    c.inconclusive && tied.has(c.claim.replace(/\s/g, ""))
+      ? { rule: "service_price" as const, claim: `${offer.serviceName} ${c.claim} (normally)`, pass: true, detail: "list price of this offer, quoted next to its discounted price" }
+      : c,
+  );
   const allowed = new Set([offer.offerPriceCents, offer.listPriceCents]);
   for (const m of text.matchAll(/([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?|ILS|NIS|shekels?|₪|€|£)(?![\p{L}\d])/giu)) {
     const cents = Math.round(Number((m[2] ?? m[3]).replace(",", ".")) * 100);

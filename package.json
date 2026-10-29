@@ -16,6 +16,7 @@
     "mock:run": "tsx scripts/mock-run.ts"
   },
   "dependencies": {
+    "@meta-sam/parser": "0.1.0",
     "@supabase/supabase-js": "^2.109.0",
     "better-sqlite3": "^12.11.1",
     "next": "^16.4.3",

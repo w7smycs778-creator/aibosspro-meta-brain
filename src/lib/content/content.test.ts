@@ -165,6 +165,15 @@ describe("caption verification", () => {
     expect(verifyCaption("Cut plus beard is ₪102 every Tuesday. Book your chair today.", CEDAR, offer).pass).toBe(true);
     expect(verifyCaption("Cut plus beard, 15% off on Tuesdays. Book your chair today.", CEDAR, offer).pass).toBe(true);
   });
+  it('"normally <list price>" next to the discounted price is tied to the offer, not left for review', () => {
+    const live = "Cut plus beard, 50 min, ₪102 only on Tuesdays (normally ₪120).\nCome in, take a seat - we've got you.";
+    const v = verifyCaption(live, CEDAR, offer);
+    expect(v.pass).toBe(true);
+    expect(v.checks.some((c) => c.inconclusive)).toBe(false);
+    expect(v.checks).toContainEqual(expect.objectContaining({ rule: "service_price", claim: "Cut plus beard ₪120 (normally)", pass: true }));
+    expect(verifyCaption("Cut plus beard ₪102 only on Tuesdays (normally ₪90).", CEDAR, offer).pass).toBe(false);
+  });
+
   it("a discounted price without its day, another service, or a wrong percent fails", () => {
     expect(verifyCaption("Cut plus beard is ₪102 this week. Book now.", CEDAR, offer).pass).toBe(false);
     expect(verifyCaption("Cut plus beard is ₪102 on Wednesday. Book now.", CEDAR, offer).pass).toBe(false);
@@ -196,33 +205,53 @@ describe("segmentation parsing", () => {
   });
 });
 
-describe("SAM 3.1 token output (fixtures/sam/mug-output.txt, live response for the synthetic mug, 2026-10-29)", () => {
+describe("SAM 3.1 masks decoded with @meta-sam/parser (fixtures/sam/mug-output.txt, live response for the synthetic mug, 2026-10-29)", () => {
   const MUG = readFileSync(join(process.cwd(), "fixtures/sam/mug-output.txt"), "utf8");
 
-  it("parses the box from the key=value token and records the undecoded mask", async () => {
+  it("decodes the saved mug mask to a 216x241 binary raster whose filled area sits inside the box", async () => {
     const seg = await parseSegmentation(MUG, 640, 480);
-    expect(seg).toMatchObject({ format: "sam-tokens+box", box: [230, 155, 470, 370], alpha: null, undecodedMask: { height: 216, width: 241 } });
-    // The box scales with the image actually sent (here half size).
-    expect((await parseSegmentation(MUG, 320, 240)).box).toEqual([115, 77.5, 235, 185]);
-    // Wrapped in the Responses API output structure, as the dispatcher passes it.
+    expect(seg.format).toBe("sam-tokens+lossless-mask");
+    // Half-open box from the parser: x2=470, y2=370 in the token are inclusive corners.
+    expect(seg.box).toEqual([230, 155, 471, 371]);
+    const m = seg.boxMask!;
+    expect([m.height, m.width, m.raster.length]).toEqual([216, 241, 216 * 241]);
+    expect([...new Set(m.raster)].sort()).toEqual([0, 1]);
+    let on = 0;
+    for (const v of m.raster) on += v;
+    expect(on / m.raster.length).toBeGreaterThan(0.5); // the mug fills most of its box
+    expect(on / m.raster.length).toBeLessThan(0.95);
+    // The raster covers the box exactly (box-local), so every filled pixel is inside the box.
+    expect([m.width, m.height]).toEqual([seg.box![2] - seg.box![0], seg.box![3] - seg.box![1]]);
+    // Wrapped in the Responses API output structure, as the dispatcher passes it; and scaled to a half-size image.
     const wrapped = JSON.stringify([{ type: "message", role: "assistant", content: [{ type: "output_text", text: MUG, annotations: [] }], status: "completed" }]);
-    expect(await parseSegmentation(wrapped, 640, 480)).toMatchObject({ format: "json+sam-tokens+box", box: [230, 155, 470, 370] });
+    expect(await parseSegmentation(wrapped, 640, 480)).toMatchObject({ format: "json+sam-tokens+lossless-mask", box: [230, 155, 471, 371] });
+    expect((await parseSegmentation(MUG, 320, 240)).box).toEqual([115, 77.5, 235.5, 185.5]);
   });
 
-  it("cuts the box from the full-resolution original with a soft vignette", async () => {
+  it("builds a transparent cutout from the decoded mask at the original resolution, feathered", async () => {
     const original = await sharp({ create: { width: 1280, height: 960, channels: 3, background: "#777777" } }).jpeg().toBuffer();
-    const sent = await samCopy(original);
-    expect(await sharp(sent).metadata()).toMatchObject({ width: 1280, height: 960 }); // under 1536: not enlarged
-    const half = await sharp(original).resize(640, 480).jpeg().toBuffer();
-    const cut = await buildCutout(half, await parseSegmentation(MUG, 640, 480), original);
-    expect(cut.kind).toBe("box");
-    expect(cut.reason).toMatch(/undocumented encoding/);
+    const sent = await sharp(original).resize(640, 480).jpeg().toBuffer();
+    const cut = await buildCutout(sent, await parseSegmentation(MUG, 640, 480), original);
+    expect(cut.kind).toBe("mask");
+    expect(cut.reason).toMatch(/SAM mask 216x241 decoded/);
     const meta = await sharp(cut.png).metadata();
-    expect([meta.width, meta.height, meta.hasAlpha]).toEqual([480, 430, true]);
+    expect([meta.width, meta.height, meta.hasAlpha]).toEqual([482, 432, true]);
     const { data } = await sharp(cut.png).raw().toBuffer({ resolveWithObject: true });
-    expect(data[3]).toBe(0); // top-left corner faded out
-    const centre = (215 * 480 + 240) * 4 + 3;
-    expect(data[centre]).toBe(255);
+    const alphas = new Set<number>();
+    for (let i = 3; i < data.length; i += 4) alphas.add(data[i]);
+    expect(alphas.has(0) && alphas.has(255)).toBe(true);
+    expect([...alphas].some((a) => a > 0 && a < 255)).toBe(true); // feathered edge
+  });
+
+  it("falls back to the box crop with a vignette when a mask does not decode", async () => {
+    // Same response with the mask payload damaged.
+    const broken = MUG.replace(/(data=216,241,~)(.{40})/, (_m, head) => `${head}${"\u0000".repeat(40)}`);
+    const seg = await parseSegmentation(broken, 640, 480);
+    expect(seg.boxMask).toBeUndefined();
+    expect(seg.box).not.toBeNull();
+    const original = await sharp({ create: { width: 640, height: 480, channels: 3, background: "#777777" } }).jpeg().toBuffer();
+    const cut = await buildCutout(original, seg, original);
+    expect(cut.kind).toBe("box");
   });
 
   it("sends SAM a copy with EXIF rotation applied and the long side at 1536", async () => {
@@ -322,7 +351,8 @@ describe("creatives", () => {
     expect(readFileSync(first.media.scene!).equals(sceneBefore)).toBe(true);
     expect(readFileSync(c.media.feed).equals(feedBefore)).toBe(false);
     expect(existsSync(c.media.cutout!)).toBe(true);
-    expect(c.diagnostics).toMatchObject({ cutout: { format: "sam-tokens+box", boxInSent: [100, 150, 300, 450] } });
+    // Half-open box from the official parser: the token's x2/y2 are inclusive corners.
+    expect(c.diagnostics).toMatchObject({ cutout: { format: "sam-tokens+box", boxInSent: [100, 150, 301, 451] } });
     expect(await sharp(c.media.story).metadata()).toMatchObject({ width: 1080, height: 1920 });
   });
 
