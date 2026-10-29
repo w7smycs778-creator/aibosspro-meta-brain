@@ -6,6 +6,7 @@ type Mode = "AUTO" | "HUMAN" | "PAUSED";
 type Turn = { id: string; seq: number; role: string; content: string; checkpoint: Record<string, any> | null };
 type OwnerState = {
   business: { id: string; name: string } | null;
+  businessName?: string;
   brain?: { version: number; approved: boolean; name: string } | null;
   approvedVersion?: number | null;
   conversations?: Array<{ id: string; channel: string; externalId: string; mode: Mode; state: string; lastCustomerMessage: string | null }>;
@@ -87,7 +88,7 @@ export function OwnerScreen() {
       <section className="space-y-4">
         <div className="rounded border bg-white p-3">
           <div className="flex items-center justify-between">
-            <h1 className="text-lg font-semibold">{state?.business?.name ?? "No business yet"}</h1>
+            <h1 className="text-lg font-semibold">{state?.business ? state.businessName ?? state.business.name : "No business yet"}</h1>
             <span className="space-x-2">
               <a href="/onboard" className="rounded border px-2 py-1 hover:bg-gray-100">
                 Onboarding / brain review
@@ -177,7 +178,7 @@ export function OwnerScreen() {
           {messages.map((m, i) => (
             <div key={i} className={m.who === "customer" ? "text-right" : ""}>
               <div
-                className={`inline-block max-w-[85%] rounded px-3 py-2 text-left ${
+                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded px-3 py-2 text-left ${
                   m.who === "customer" ? "bg-blue-600 text-white" : m.who === "owner" ? "bg-amber-100" : "bg-gray-100"
                 }`}
               >

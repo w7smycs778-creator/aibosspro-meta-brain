@@ -112,6 +112,16 @@ Branch `day3a-storage`. No model was called: the tests and the scripted demo use
 - Tests: `src/lib/engine/onboarding.test.ts` (typed path to approval and the next system prompt, drafts never used, discard, edits validated, invalid extraction creates no draft, the upload route reaching a stubbed transcriber, WAV checks, old-shape brains). Two existing test fixtures moved from New York to Israel time. Full suite 78/78; `next build` clean.
 - Live test (run live-b2-20261029, typed path with research/ONBOARDING-DEMO-SCRIPT.md, `next start` on the durable ./data ledger with run caps 4 calls and $0.50; `next dev` could not start a second time because the owner had one running): extraction produced draft v2 with the four services, prices, durations, hours, the Tuesday 15% rule and the tone correct, but the time zone as America/New_York instead of Jerusalem (the prompt defaulted to the previous brain's zone) and lowercase service names. Corrected in review, approved, and "What do you offer?" was answered from the new brain in one call with no list_services call, every verifier check passing. 2 calls, $0.009625. Live spend in ./data today: $0.065187 across 26 rows, including 3 calls ($0.008322) made at 14:16 from the owner's own dev server.
 
+### 2026-10-29 — Day 3 cleanup: display + timezone extraction fixes
+
+No new features and no model calls; ./data was not reset or modified.
+- /owner header shows the current approved brain's name (Cedar Street Barbers) instead of the seeded registry name.
+- /onboard labels the source box "Voice transcript (vN)" or "Typed text (vN)" and shows the stored text. Cause of the empty box on audio draft v3: the owner's dev server had been running since before Block B2; its store singleton (in an unchanged module) kept the pre-B2 store instance through hot reload, so the draft was saved without its source. `getStore` now reopens the store when its implementation module has been replaced. v3's transcript was never stored and cannot be recovered without re-transcribing.
+- Extraction time zone: an explicit list maps a named place to its zone (Jerusalem, Tel Aviv, Israel -> Asia/Jerusalem; New York -> America/New_York; London -> Europe/London; whole words only). A named place overrides the model and the previous brain; the previous brain's zone is only the fallback when no place is named.
+- Bookings and pending approvals show the service name from the brain version in force when the booking was made (fallback: the id) and the time in the business time zone with its abbreviation (IST/IDT for Israel). Storage stays absolute UTC.
+- Panel replies keep line breaks; the "[AI assistant]" prefix stays. Root layout marks html and body with suppressHydrationWarning for browser-extension attributes.
+- Tests: `src/lib/engine/cleanup.test.ts`. Full suite 86/86; `next build` clean.
+
 ## Third-party
 
 ## Day 2 close — 2026-10-28 (channel live)

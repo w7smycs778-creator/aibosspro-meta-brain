@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { sourceBox } from "@/lib/engine/display";
 
 type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 const DAYS: Weekday[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -222,10 +223,8 @@ export function Onboarding() {
       {draft && edit && (
         <section key={draft.version} className="grid gap-4 rounded border bg-white p-3 lg:grid-cols-[1fr_2fr]">
           <div>
-            <h2 className="mb-1 font-semibold">
-              {draft.source?.kind === "voice" ? "Transcript" : "Typed text"} (v{draft.version})
-            </h2>
-            <pre className="whitespace-pre-wrap rounded bg-gray-100 p-2 text-xs">{draft.source?.text ?? "(none)"}</pre>
+            <h2 className="mb-1 font-semibold">{sourceBox(draft.version, draft.source).label}</h2>
+            <pre className="whitespace-pre-wrap rounded bg-gray-100 p-2 text-xs">{sourceBox(draft.version, draft.source).text}</pre>
             {draft.source?.audioPath && <p className="mt-1 break-all text-xs text-gray-500">Audio: {draft.source.audioPath}</p>}
           </div>
           <div className="space-y-3">

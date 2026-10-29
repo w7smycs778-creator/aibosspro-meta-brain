@@ -153,12 +153,28 @@ export const EXTRACTION_SCHEMA = {
   },
 };
 
-function extractionPrompt(defaults: { timezone: string; currency: string }): string {
+/** Place names that fix the time zone. Explicit list, whole words only, no fuzzy matching. */
+const PLACE_ZONES: Array<[RegExp, string]> = [
+  [/\b(?:jerusalem|tel[\s-]?aviv|israel)\b/i, "Asia/Jerusalem"],
+  [/\bnew york\b/i, "America/New_York"],
+  [/\blondon\b/i, "Europe/London"],
+];
+
+/** The one IANA zone named by a place in the text, or null when none (or more than one zone) is named. */
+export function namedZone(text: string): string | null {
+  const zones = new Set(PLACE_ZONES.filter(([re]) => re.test(text)).map(([, zone]) => zone));
+  return zones.size === 1 ? [...zones][0] : null;
+}
+
+function extractionPrompt(defaults: { timezone: string; currency: string; named: string | null }): string {
   return [
     "Extract the business owner's operating rules into the JSON schema. Use only facts the owner stated; never invent services, prices, hours or discounts.",
     "Prices are numbers in major units (35 means 35.00). Durations are whole minutes. Times are 24-hour HH:MM.",
     "Service ids are the lowercase snake_case of the service name. A day the owner did not say is open is closed: an empty list.",
-    `If the time zone is not stated, use ${defaults.timezone}. If the currency is not stated, use ${defaults.currency}.`,
+    defaults.named
+      ? `The owner names a place in the ${defaults.named} time zone: timezone is ${defaults.named}.`
+      : `If the time zone is not stated, use ${defaults.timezone}.`,
+    `If the currency is not stated, use ${defaults.currency}.`,
     "For each discount: pct_or_amount is the percent or the fixed amount off; conditions.service_ids use your service ids (empty for every service), conditions.weekdays use mon..sun (empty for every day), anything else goes in conditions.note.",
     "booking_policy.approval_required is always true.",
     "tone: 3 to 5 adjectives for how the business talks, and one short example sentence in that voice.",
@@ -217,7 +233,10 @@ export function validateBrain(b: BusinessBrain): string[] {
 }
 
 /** Converts Spark's snake_case output to a brain, fixing what is safe to fix; returns errors for the rest. */
-export function brainFromExtraction(raw: any, defaults: { timezone: string; currency: string }): { brain: BusinessBrain; errors: string[] } {
+export function brainFromExtraction(
+  raw: any,
+  defaults: { timezone: string; currency: string; named?: string | null },
+): { brain: BusinessBrain; errors: string[] } {
   const currency = String(raw?.services?.[0]?.currency || defaults.currency).toUpperCase();
   const used = new Set<string>();
   const services: Service[] = (Array.isArray(raw?.services) ? raw.services : []).map((s: any) => {
@@ -254,7 +273,8 @@ export function brainFromExtraction(raw: any, defaults: { timezone: string; curr
   const adjectives = (Array.isArray(raw?.tone?.adjectives) ? raw.tone.adjectives : []).map(String).slice(0, 5);
   const brain: BusinessBrain = {
     name: String(raw?.business_name ?? "").trim(),
-    timezone: String(raw?.timezone || defaults.timezone).trim(),
+    // A place named in the owner's text wins over the model's answer and the previous brain's zone.
+    timezone: defaults.named ?? String(raw?.timezone || defaults.timezone).trim(),
     languages: (Array.isArray(raw?.languages) && raw.languages.length ? raw.languages : ["English"]).map(String),
     tone: { adjectives, example: String(raw?.tone?.example_sentence ?? "").trim() },
     currency,
@@ -276,7 +296,8 @@ export async function extractBrainDraft(
   if (!text) throw new OnboardingError("nothing to extract: the text is empty", 400);
   if (!deps.gateway) throw new OnboardingError(`model unavailable: ${deps.gatewayError ?? "no gateway"}`, 503);
   const current = await deps.store.getBrain(input.businessId, { approvedOnly: true });
-  const defaults = { timezone: current?.brain.timezone ?? "Asia/Jerusalem", currency: current?.brain.currency ?? "ILS" };
+  // The previous brain's zone is only a fallback for text that names no place.
+  const defaults = { timezone: current?.brain.timezone ?? "Asia/Jerusalem", currency: current?.brain.currency ?? "ILS", named: namedZone(text) };
   const r = await deps.gateway.call({
     kind: "chat",
     model: deps.model,

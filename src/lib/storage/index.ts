@@ -35,11 +35,26 @@ export async function createStore(env: Env = process.env): Promise<Storage> {
 
 let shared: Promise<Storage> | undefined;
 
-/** Process-wide store; a failed open is retried on the next call. */
-export function getStore(): Promise<Storage> {
+/**
+ * Process-wide store; a failed open is retried on the next call. In a
+ * long-running dev server, hot reload can replace the store module while this
+ * one keeps the old instance (on 2026-10-29 that dropped a draft's transcript),
+ * so an instance of a replaced class is reopened.
+ */
+export async function getStore(): Promise<Storage> {
+  if (shared) {
+    const store = await shared.catch(() => undefined);
+    if (store && (await isCurrentImplementation(store))) return store;
+    shared = undefined;
+  }
   shared ??= createStore().catch((err) => {
     shared = undefined;
     throw err;
   });
   return shared;
+}
+
+async function isCurrentImplementation(store: Storage): Promise<boolean> {
+  if (store.backend === "local") return store instanceof (await import("./local-store")).LocalStore;
+  return store instanceof (await import("./supabase-store")).SupabaseStore;
 }

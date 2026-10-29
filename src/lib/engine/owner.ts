@@ -1,5 +1,6 @@
 // Owner actions and the owner screen's view of the store.
-import type { Booking, Conversation, ConversationMode, PendingApproval, Storage } from "../storage/types";
+import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage } from "../storage/types";
+import { formatWithZone } from "./display";
 import { formatLocal } from "./time";
 
 export type Decision = "approved" | "rejected";
@@ -43,20 +44,29 @@ export async function setMode(store: Storage, conversationId: string, mode: Conv
   return store.updateConversation(conversationId, { mode, state: "active" });
 }
 
+/** The approved version in force at an instant: the latest one approved at or before it (else the first approved). */
+function brainAt(versions: BrainVersion[], at: string): BrainVersion | undefined {
+  const approved = versions.filter((v) => v.approved && v.approvedAt).sort((a, b) => a.approvedAt!.localeCompare(b.approvedAt!));
+  return [...approved].reverse().find((v) => v.approvedAt! <= at) ?? approved[0];
+}
+
 export async function ownerState(store: Storage, businessId: string) {
   const business = await store.getBusiness(businessId);
   if (!business) return { business: null };
-  const brain = await store.getBrain(businessId);
-  const approvedBrain = await store.getBrain(businessId, { approvedOnly: true });
+  const versions = await store.listBrainVersions(businessId);
+  const brain = versions[0] ?? null;
+  const approvedBrain = versions.find((v) => v.approved) ?? null;
   const tz = (approvedBrain ?? brain)?.brain.timezone ?? "UTC";
-  const serviceName = (id: string) => (approvedBrain ?? brain)?.brain.services.find((s) => s.id === id)?.name ?? id;
+  // A booking shows the service name from the brain in force when it was made; storage keeps only the id.
+  const serviceName = (id: string, at: string) =>
+    brainAt(versions, at)?.brain.services.find((s) => s.id === id)?.name ??
+    versions.map((v) => v.brain.services.find((s) => s.id === id)?.name).find(Boolean) ??
+    id;
+  const show = (b: Booking) => ({ ...b, serviceName: serviceName(b.serviceId, b.createdAt), when: formatWithZone(b.startsAt, tz) });
   const bookings = await store.listBookings(businessId);
   const approvals = (await store.listPendingApprovals(businessId)).map((a) => {
     const booking = bookings.find((b) => b.approvalId === a.id) ?? null;
-    return {
-      ...a,
-      booking: booking && { ...booking, serviceName: serviceName(booking.serviceId), when: formatLocal(booking.startsAt, tz) },
-    };
+    return { ...a, booking: booking && show(booking) };
   });
   const conversations = await Promise.all(
     (await store.listConversations(businessId)).map(async (c) => {
@@ -67,10 +77,12 @@ export async function ownerState(store: Storage, businessId: string) {
   );
   return {
     business,
+    /** Header name: the current approved brain's, not the seeded registry name. */
+    businessName: approvedBrain?.brain.name || business.name,
     brain: brain && { version: brain.version, approved: brain.approved, name: brain.brain.name },
     approvedVersion: approvedBrain?.version ?? null,
     conversations,
     approvals,
-    bookings: bookings.map((b) => ({ ...b, serviceName: serviceName(b.serviceId), when: formatLocal(b.startsAt, tz) })),
+    bookings: bookings.map(show),
   };
 }
