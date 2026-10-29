@@ -74,6 +74,7 @@ export type Creative = {
 };
 
 export type NewCreative = Omit<Creative, "id" | "status" | "createdAt" | "decidedAt">;
+export type CreativePatch = Partial<Pick<Creative, "media" | "cutoutKind" | "sceneKind" | "diagnostics" | "caption" | "captionLog">>;
 
 export type BrainSource = {
   kind: "voice" | "text" | "seed";
@@ -283,6 +284,8 @@ export interface Storage extends SpendLedgerStore {
   getCreative(id: string): Promise<Creative | null>;
   listCreatives(businessId: string): Promise<Creative[]>;
   updateCreativeCaption(id: string, caption: string, captionLog: Record<string, unknown> | null): Promise<Creative>;
+  /** Replaces a pending creative's images, caption and logs in place (same id, offer and brain version). */
+  updateCreative(id: string, patch: CreativePatch): Promise<Creative>;
   /** Approves or rejects a pending creative; an already decided one is left as is (changed: false). */
   decideCreative(id: string, decision: "approved" | "rejected"): Promise<{ creative: Creative; changed: boolean }>;
 

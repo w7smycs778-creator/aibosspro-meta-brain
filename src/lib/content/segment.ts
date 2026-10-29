@@ -1,17 +1,23 @@
 // SAM 3.1 cutout. The API documents the output only as "special-token text,
-// one box + mask per match", so this parser accepts the plausible encodings
-// (JSON with a base64 PNG mask, COCO run-length counts, or a box; token-wrapped
-// boxes and masks) and reports what it saw. A mask becomes the alpha channel of
-// a transparent PNG; a box alone becomes a framed crop; nothing usable means
-// the caller falls back to the framed original.
+// one box + mask per match". Observed live (fixtures/sam/mug-output.txt):
+//   <0f>0<|box;x1=230;y1=155;x2=470;y2=370;w=640;h=480|><|mask;x=0;y=0;data=216,241,<encoded>|>
+// The box is in pixels of a w x h image. The mask is box-local (216 x 241 for
+// that box) in an encoding that matches no standard base-N + zlib scheme, so it
+// is recorded but not decoded. The parser also accepts JSON with a base64 PNG
+// or COCO run-length mask, in case another response shape appears. A decoded
+// mask becomes the alpha channel; a box alone becomes a crop with a soft
+// vignette; nothing usable means the caller falls back to the framed original.
 import sharp from "sharp";
 
 export type Box = [x1: number, y1: number, x2: number, y2: number];
 export type Segmentation = {
   /** One byte per pixel (0..255) at the size of the image sent, row-major. */
   alpha: Buffer | null;
+  /** Box in pixels of the image sent. */
   box: Box | null;
   format: string;
+  /** A mask token was present but its encoding could not be decoded. */
+  undecodedMask?: { width: number; height: number; length: number };
 };
 
 /** Byte-free description of a model output for logs: length, JSON keys, tokens, a head with long base64 runs elided. */
@@ -145,6 +151,21 @@ function collectStrings(v: unknown): string[] {
 }
 
 async function parseTokens(text: string, w: number, h: number): Promise<Segmentation> {
+  // SAM 3.1 key=value tokens, as observed live.
+  const kvBox = text.match(/<\|box;([^|]*)\|>/);
+  if (kvBox) {
+    const f = Object.fromEntries(kvBox[1].split(";").map((p) => p.split("=") as [string, string]));
+    const refW = Number(f.w) || w;
+    const refH = Number(f.h) || h;
+    const box = toBox([Number(f.x1) * (w / refW), Number(f.y1) * (h / refH), Number(f.x2) * (w / refW), Number(f.y2) * (h / refH)], w, h);
+    const kvMask = text.match(/<\|mask;[^|]*?data=(\d+),(\d+),([^|]*)\|>/);
+    return {
+      alpha: null,
+      box,
+      format: box ? "sam-tokens+box" : "sam-tokens-unrecognised",
+      ...(kvMask && { undecodedMask: { height: Number(kvMask[1]), width: Number(kvMask[2]), length: kvMask[3].length } }),
+    };
+  }
   const maskToken = text.match(/<\|?mask[^>]*\|?>\s*([A-Za-z0-9+/=]{100,})/i);
   const boxToken = text.match(/<\|?(?:box|bbox)[^>]*\|?>\s*\(?\[?\s*([-\d.,\s]+)/i);
   const alpha = maskToken ? await pngToAlpha(maskToken[1], w, h).catch(() => null) : null;
@@ -168,13 +189,35 @@ function maskBounds(alpha: Buffer, w: number, h: number): Box {
 
 export type Cutout = { png: Buffer; kind: "mask" | "box" | "unavailable"; reason: string };
 
+/** A crop whose edges fade out in a soft ellipse, so it sits on the scene without a hard frame. */
+async function vignette(crop: Buffer): Promise<Buffer> {
+  const { width, height } = await sharp(crop).metadata();
+  const mask = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><radialGradient id="g" cx="50%" cy="50%" r="50%">` +
+      `<stop offset="62%" stop-color="#fff" stop-opacity="1"/><stop offset="100%" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>` +
+      `<ellipse cx="${width! / 2}" cy="${height! / 2}" rx="${width! / 2}" ry="${height! / 2}" fill="url(#g)"/></svg>`,
+  );
+  return sharp(crop).ensureAlpha().composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+}
+
 /**
- * Builds the cutout from the image that was sent to SAM. A mask covering under
- * 1% or over 90% of the frame is treated as unusable (it picked nothing, or the
- * whole scene).
+ * Builds the cutout. The segmentation refers to `sent` (the downscaled copy
+ * given to SAM); the cutout is cut from `original` at full resolution, with the
+ * box or mask scaled back to it. A mask covering under 1% or over 90% of the
+ * frame is treated as unusable (it picked nothing, or the whole scene).
  */
-export async function buildCutout(image: Buffer, seg: Segmentation): Promise<Cutout> {
-  const { width: w, height: h } = await sharp(image).metadata();
+export async function buildCutout(sent: Buffer, seg: Segmentation, original: Buffer = sent): Promise<Cutout> {
+  const { width: sw, height: sh } = await sharp(sent).metadata();
+  const { width: ow, height: oh } = await sharp(original).metadata();
+  const sx = ow! / sw!;
+  const sy = oh! / sh!;
+  const image = original;
+  const w = ow;
+  const h = oh;
+  if (seg.alpha && (sx !== 1 || sy !== 1)) {
+    seg = { ...seg, alpha: await sharp(seg.alpha, { raw: { width: sw!, height: sh!, channels: 1 } }).resize(ow!, oh!, { fit: "fill" }).raw().toBuffer() };
+  }
+  if (seg.box) seg = { ...seg, box: [seg.box[0] * sx, seg.box[1] * sy, seg.box[2] * sx, seg.box[3] * sy] };
   if (seg.alpha) {
     const c = coverage(seg.alpha);
     if (c >= 0.01 && c <= 0.9) {
@@ -199,8 +242,11 @@ export async function buildCutout(image: Buffer, seg: Segmentation): Promise<Cut
   }
   if (seg.box) {
     const [x1, y1, x2, y2] = seg.box.map(Math.round);
-    const png = await sharp(image).extract({ left: x1, top: y1, width: x2 - x1, height: y2 - y1 }).png().toBuffer();
-    return { png, kind: "box", reason: "box only, no usable mask" };
+    const left = Math.max(0, x1);
+    const top = Math.max(0, y1);
+    const crop = await sharp(image).extract({ left, top, width: Math.min(w!, x2) - left, height: Math.min(h!, y2) - top }).png().toBuffer();
+    const why = seg.undecodedMask ? `box crop with soft vignette; mask returned (${seg.undecodedMask.width}x${seg.undecodedMask.height}) in an undocumented encoding` : "box crop with soft vignette; no mask";
+    return { png: await vignette(crop), kind: "box", reason: why };
   }
   return { png: await sharp(image).png().toBuffer(), kind: "unavailable", reason: `no mask or box (${seg.format})` };
 }

@@ -1,5 +1,5 @@
 // Content engine and the WhatsApp default-mode setting. Stub dispatchers only.
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
@@ -18,7 +18,7 @@ import { SEED_BRAIN, SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain } from "../storage/types";
 import { verifyCaption } from "./caption";
 import { bandSvg, composite, SIZES } from "./composite";
-import { decideCreative, generateCreative, scenePrompt } from "./creative";
+import { decideCreative, generateCreative, regenerateCreative, samCopy, scenePrompt } from "./creative";
 import { findOffer, listOffers } from "./offers";
 import { buildCutout, parseSegmentation } from "./segment";
 
@@ -196,6 +196,41 @@ describe("segmentation parsing", () => {
   });
 });
 
+describe("SAM 3.1 token output (fixtures/sam/mug-output.txt, live response for the synthetic mug, 2026-10-29)", () => {
+  const MUG = readFileSync(join(process.cwd(), "fixtures/sam/mug-output.txt"), "utf8");
+
+  it("parses the box from the key=value token and records the undecoded mask", async () => {
+    const seg = await parseSegmentation(MUG, 640, 480);
+    expect(seg).toMatchObject({ format: "sam-tokens+box", box: [230, 155, 470, 370], alpha: null, undecodedMask: { height: 216, width: 241 } });
+    // The box scales with the image actually sent (here half size).
+    expect((await parseSegmentation(MUG, 320, 240)).box).toEqual([115, 77.5, 235, 185]);
+    // Wrapped in the Responses API output structure, as the dispatcher passes it.
+    const wrapped = JSON.stringify([{ type: "message", role: "assistant", content: [{ type: "output_text", text: MUG, annotations: [] }], status: "completed" }]);
+    expect(await parseSegmentation(wrapped, 640, 480)).toMatchObject({ format: "json+sam-tokens+box", box: [230, 155, 470, 370] });
+  });
+
+  it("cuts the box from the full-resolution original with a soft vignette", async () => {
+    const original = await sharp({ create: { width: 1280, height: 960, channels: 3, background: "#777777" } }).jpeg().toBuffer();
+    const sent = await samCopy(original);
+    expect(await sharp(sent).metadata()).toMatchObject({ width: 1280, height: 960 }); // under 1536: not enlarged
+    const half = await sharp(original).resize(640, 480).jpeg().toBuffer();
+    const cut = await buildCutout(half, await parseSegmentation(MUG, 640, 480), original);
+    expect(cut.kind).toBe("box");
+    expect(cut.reason).toMatch(/undocumented encoding/);
+    const meta = await sharp(cut.png).metadata();
+    expect([meta.width, meta.height, meta.hasAlpha]).toEqual([480, 430, true]);
+    const { data } = await sharp(cut.png).raw().toBuffer({ resolveWithObject: true });
+    expect(data[3]).toBe(0); // top-left corner faded out
+    const centre = (215 * 480 + 240) * 4 + 3;
+    expect(data[centre]).toBe(255);
+  });
+
+  it("sends SAM a copy with EXIF rotation applied and the long side at 1536", async () => {
+    const big = await sharp({ create: { width: 3213, height: 5712, channels: 3, background: "#123456" } }).jpeg().toBuffer();
+    expect(await sharp(await samCopy(big)).metadata()).toMatchObject({ width: 864, height: 1536, format: "jpeg" });
+  });
+});
+
 describe("creatives", () => {
   it("are generated as PENDING_APPROVAL with both images, and approval is idempotent", async () => {
     const store = await cedarStore();
@@ -266,6 +301,29 @@ describe("creatives", () => {
     expect(c.caption).toBe("Cut plus beard is ₪102 every Tuesday. Book your chair today.");
     expect((c.captionLog as { attempts: Array<{ checks: Array<{ claim: string }> }> }).attempts[0].checks[0].claim).toBe("empty caption");
     expect(d.calls.filter((x) => x.kind === "chat").every((x) => x.kind === "chat" && x.maxOutputTokens === 2_048)).toBe(true);
+  });
+
+  it("regenerate rebuilds a pending creative in place: new cutout, existing scene, one caption attempt", async () => {
+    const store = await cedarStore();
+    const first = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    expect(first.cutoutKind).toBe("unavailable");
+    const sceneBefore = readFileSync(first.media.scene!);
+    const feedBefore = readFileSync(first.media.feed);
+
+    // The test photo is 400x600; scale the mug box into it as SAM would for this image.
+    const segment = "<0f>0<|box;x1=100;y1=150;x2=300;y2=450;w=400;h=600|><|mask;x=0;y=0;data=301,201,!!~|>";
+    const d = stub({ segment, captions: ["Cut plus beard is ₪102 every Tuesday. Book your chair today."] });
+    const c = await regenerateCreative(deps(store, d), first.id, { object: "hair clipper", segment: true, caption: true, captionAttempts: 1 });
+
+    expect(c).toMatchObject({ id: first.id, offerId: OFFER_ID, brainVersion: 2, status: "pending_approval", cutoutKind: "box", sceneKind: "generated" });
+    expect(c.caption).toBe("Cut plus beard is ₪102 every Tuesday. Book your chair today.");
+    expect(d.calls.map((x) => x.kind)).toEqual(["segment", "chat"]); // no new image call
+    expect(d.calls[0]).toMatchObject({ prompt: "hair clipper", mimeType: "image/jpeg" });
+    expect(readFileSync(first.media.scene!).equals(sceneBefore)).toBe(true);
+    expect(readFileSync(c.media.feed).equals(feedBefore)).toBe(false);
+    expect(existsSync(c.media.cutout!)).toBe(true);
+    expect(c.diagnostics).toMatchObject({ cutout: { format: "sam-tokens+box", boxInSent: [100, 150, 300, 450] } });
+    expect(await sharp(c.media.story).metadata()).toMatchObject({ width: 1080, height: 1920 });
   });
 
   it("refuses an offer that is not in the current approved brain", async () => {

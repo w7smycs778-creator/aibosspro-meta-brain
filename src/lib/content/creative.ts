@@ -4,8 +4,8 @@
 // gateway and writes a ledger row. Any model step may fail; both images are
 // always produced.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import sharp from "sharp";
 import type { EngineDeps } from "../engine/deps";
 import { DEFAULT_LOCAL_DIR } from "../storage";
@@ -83,7 +83,7 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
     diagnostics.segmentation = { outcome: r.outcome, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
     if (r.outcome === "ok") {
       const seg = await parseSegmentation(r.output, sw!, sh!);
-      const cut = await buildCutout(sent, seg);
+      const cut = await buildCutout(sent, seg, original);
       diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason };
       cutoutKind = cut.kind;
       if (cut.kind !== "unavailable") {
@@ -112,7 +112,7 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
 
   // Composites: always both sizes, from the same parts.
   const band: Band = { name: brain.name, headline: offer.headline, price: offer.priceText, note: offer.kind === "discount" ? `Normally ${offer.listPriceText}` : null };
-  const parts = { scene, brandColor: brandColor(brain.name), subject, subjectKind: cutoutKind === "mask" ? ("cutout" as const) : ("framed" as const), band };
+  const parts = { scene, brandColor: brandColor(brain.name), subject, subjectKind: cutoutKind === "unavailable" ? ("framed" as const) : ("cutout" as const), band };
   writeFileSync(path("feed.png"), await composite(parts, "feed"));
   writeFileSync(path("story.png"), await composite(parts, "story"));
 
@@ -129,6 +129,77 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
     cutoutKind,
     sceneKind,
     diagnostics: { ...diagnostics, band },
+  });
+}
+
+/** Downscaled copy for SAM: EXIF rotation applied, long side at most 1536 px, JPEG quality 85. The original is never sent. */
+export async function samCopy(original: Buffer): Promise<Buffer> {
+  return sharp(original).rotate().resize(SEND_MAX_PX, SEND_MAX_PX, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+}
+
+export type RegenerateOptions = { object: string; segment: boolean; caption: boolean; captionAttempts?: number };
+
+/**
+ * Rebuilds a pending creative in place (same id, offer and brain version):
+ * optionally a new SAM cutout from the stored original, composites redrawn on
+ * the EXISTING scene (no new image call), optionally a new caption.
+ */
+export async function regenerateCreative(deps: EngineDeps, creativeId: string, opts: RegenerateOptions): Promise<Creative> {
+  const { store } = deps;
+  const creative = await store.getCreative(creativeId);
+  if (!creative) throw new ContentError("creative not found", 404);
+  if (creative.status !== "pending_approval") throw new ContentError("creative is already decided", 409);
+  const brain = (await store.listBrainVersions(creative.businessId)).find((v) => v.version === creative.brainVersion)?.brain;
+  const offer = brain ? findOffer(brain, creative.offerId) : null;
+  if (!brain || !offer) throw new ContentError("the creative's brain version or offer is gone", 409);
+
+  const dir = dirname(creative.media.feed);
+  const original = readFileSync(creative.media.original);
+  const diagnostics: Record<string, unknown> = { ...creative.diagnostics, regeneratedAt: deps.now().toISOString() };
+  let cutoutKind = creative.cutoutKind;
+  let cutoutPath = creative.media.cutout;
+  let subject: Buffer = cutoutPath ? readFileSync(cutoutPath) : original;
+
+  if (opts.segment && deps.gateway) {
+    const sent = await samCopy(original);
+    writeFileSync(join(dir, "sent.jpg"), sent);
+    const { width: sw, height: sh } = await sharp(sent).metadata();
+    const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: opts.object, image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: creative.businessId });
+    diagnostics.object = opts.object;
+    diagnostics.segmentation = { outcome: r.outcome, sent: `${sw}x${sh}`, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
+    if (r.outcome === "ok") {
+      const seg = await parseSegmentation(r.output, sw!, sh!);
+      const cut = await buildCutout(sent, seg, original);
+      diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason, boxInSent: seg.box, ...(seg.undecodedMask && { undecodedMask: seg.undecodedMask }) };
+      cutoutKind = cut.kind;
+      if (cut.kind !== "unavailable") {
+        writeFileSync(join(dir, "cutout.png"), cut.png);
+        cutoutPath = join(dir, "cutout.png");
+        subject = cut.png;
+      }
+    }
+  }
+
+  const scene = creative.media.scene ? readFileSync(creative.media.scene) : null;
+  const band = (creative.diagnostics.band as Band | undefined) ?? { name: brain.name, headline: offer.headline, price: offer.priceText, note: offer.kind === "discount" ? `Normally ${offer.listPriceText}` : null };
+  const parts = { scene, brandColor: brandColor(brain.name), subject: cutoutKind === "unavailable" ? original : subject, subjectKind: cutoutKind === "unavailable" ? ("framed" as const) : ("cutout" as const), band };
+  writeFileSync(creative.media.feed, await composite(parts, "feed"));
+  writeFileSync(creative.media.story, await composite(parts, "story"));
+
+  let caption = creative.caption;
+  let captionLog = creative.captionLog;
+  if (opts.caption) {
+    const written = await writeCaption(deps, brain, offer, creative.businessId, opts.captionAttempts ?? 2);
+    caption = written.caption;
+    captionLog = written.log as unknown as Record<string, unknown>;
+  }
+
+  return store.updateCreative(creativeId, {
+    media: { ...creative.media, cutout: cutoutKind === "unavailable" ? null : cutoutPath },
+    cutoutKind,
+    diagnostics,
+    caption,
+    captionLog,
   });
 }
 

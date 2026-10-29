@@ -18,6 +18,7 @@ import type {
   BusinessBrain,
   Channel,
   Creative,
+  CreativePatch,
   NewCreative,
   Conversation,
   ConversationMode,
@@ -140,6 +141,19 @@ export class SupabaseStore implements Storage {
       await this.db.from("creatives").update({ caption, caption_log: captionLog }).eq("id", id).eq("status", "pending_approval").select(),
       "updateCreativeCaption",
     ) as Row[];
+    if (rows.length === 0) throw new Error(`creative ${id} is not pending approval`);
+    return toCreative(rows[0]);
+  }
+
+  async updateCreative(id: string, patch: CreativePatch): Promise<Creative> {
+    const row: Record<string, unknown> = {};
+    if (patch.media !== undefined) row.media = patch.media;
+    if (patch.cutoutKind !== undefined) row.cutout_kind = patch.cutoutKind;
+    if (patch.sceneKind !== undefined) row.scene_kind = patch.sceneKind;
+    if (patch.diagnostics !== undefined) row.diagnostics = patch.diagnostics;
+    if (patch.caption !== undefined) row.caption = patch.caption;
+    if (patch.captionLog !== undefined) row.caption_log = patch.captionLog;
+    const rows = check(await this.db.from("creatives").update(row).eq("id", id).eq("status", "pending_approval").select(), "updateCreative") as Row[];
     if (rows.length === 0) throw new Error(`creative ${id} is not pending approval`);
     return toCreative(rows[0]);
   }

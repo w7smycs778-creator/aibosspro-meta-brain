@@ -21,6 +21,7 @@ import type {
   BusinessBrain,
   Channel,
   Creative,
+  CreativePatch,
   NewCreative,
   Conversation,
   ConversationMode,
@@ -302,6 +303,16 @@ export class LocalStore implements Storage {
       .prepare("update creatives set caption = ?, caption_log = ? where id = ? and status = 'pending_approval'")
       .run(caption, captionLog ? JSON.stringify(captionLog) : null, id);
     if (res.changes === 0) throw new Error(`creative ${id} is not pending approval`);
+    return (await this.getCreative(id))!;
+  }
+
+  async updateCreative(id: string, patch: CreativePatch): Promise<Creative> {
+    const current = await this.getCreative(id);
+    if (!current || current.status !== "pending_approval") throw new Error(`creative ${id} is not pending approval`);
+    const next = { ...current, ...patch };
+    this.db
+      .prepare("update creatives set media = ?, cutout_kind = ?, scene_kind = ?, diagnostics = ?, caption = ?, caption_log = ? where id = ? and status = 'pending_approval'")
+      .run(JSON.stringify(next.media), next.cutoutKind, next.sceneKind, JSON.stringify(next.diagnostics), next.caption, next.captionLog ? JSON.stringify(next.captionLog) : null, id);
     return (await this.getCreative(id))!;
   }
 

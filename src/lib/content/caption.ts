@@ -63,14 +63,20 @@ function captionPrompt(brain: BusinessBrain, offer: Offer): string {
     .join("\n");
 }
 
-export async function writeCaption(deps: EngineDeps, brain: BusinessBrain, offer: Offer, businessId: string): Promise<{ caption: string; log: CaptionLog }> {
+export async function writeCaption(
+  deps: EngineDeps,
+  brain: BusinessBrain,
+  offer: Offer,
+  businessId: string,
+  maxAttempts = 2,
+): Promise<{ caption: string; log: CaptionLog }> {
   const log: CaptionLog = { attempts: [], final: "empty" };
   if (!deps.gateway) return { caption: "", log };
   const messages: ChatMessage[] = [
     { role: "system", content: captionPrompt(brain, offer) },
     { role: "user", content: "Write the caption." },
   ];
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const r = await deps.gateway.call({
       kind: "chat",
       model: deps.model,
