@@ -1,4 +1,7 @@
 import { createHmac } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ECHO_LIMIT, REPLY_PREFIX } from "./webhook";
 import { verifySignature } from "./signature";
@@ -6,6 +9,10 @@ import { verifySignature } from "./signature";
 // after() needs a Next request scope; tests collect the callbacks and run them.
 const pending: Array<() => unknown> = [];
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => void pending.push(fn) }));
+
+// Durable dedupe writes to a throwaway local store.
+process.env.STORAGE_BACKEND = "local";
+process.env.STORAGE_DIR = mkdtempSync(join(tmpdir(), "meta-brain-wa-"));
 
 const { GET, POST } = await import("@/app/api/whatsapp/webhook/route");
 

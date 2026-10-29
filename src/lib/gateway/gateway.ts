@@ -1,9 +1,9 @@
 import { DEFAULT_BOUNDS, type GatewayBounds } from "./config";
 import { PreDispatchError } from "./errors";
-import type { SpendLedger } from "./ledger";
+import type { SpendLedger, SpendUsage } from "./ledger";
 import type { NanoUsd } from "./money";
-import { actualCost, estimateMaxCost } from "./pricing";
-import type { AttemptRecord, DenyReason, DispatchResult, Dispatcher, GatewayResult, ModelCall } from "./types";
+import { actualCost, estimateMaxCost, PRICES, type PriceTable } from "./pricing";
+import type { AttemptRecord, BillingUnits, DenyReason, DispatchResult, Dispatcher, GatewayResult, ModelCall } from "./types";
 
 export type GatewayOptions = {
   ledger: SpendLedger;
@@ -11,6 +11,8 @@ export type GatewayOptions = {
   bounds?: Partial<GatewayBounds>;
   /** Scope every call to one run with its own cap (e.g. a $10 smoke run). */
   run?: { id: string; capNano: NanoUsd };
+  /** Price table; tests pass one for a mock model. Defaults to PRICES. */
+  prices?: PriceTable;
   now?: () => number;
 };
 
@@ -45,14 +47,17 @@ export function boundsViolation(call: ModelCall, b: GatewayBounds): string | nul
  * The only path to a billable model call. Each attempt (first try and every
  * retry) reserves its conservative maximum cost before dispatch and settles to
  * the provider-reported cost afterward; when the provider reports no units the
- * attempt settles at the full reservation.
+ * attempt settles at the full reservation. The ledger row is written at
+ * reserve and settled before the result is returned to the caller.
  */
 export class SpendGateway {
   private readonly bounds: GatewayBounds;
   private readonly now: () => number;
+  private readonly prices: PriceTable;
 
   constructor(private readonly opts: GatewayOptions) {
     this.bounds = { ...DEFAULT_BOUNDS, ...opts.bounds };
+    this.prices = opts.prices ?? PRICES;
     this.now = opts.now ?? (() => performance.now());
   }
 
@@ -71,15 +76,29 @@ export class SpendGateway {
     const violation = boundsViolation(call, this.bounds);
     if (violation) return deny("bounds_exceeded", violation);
 
-    const estimate = estimateMaxCost(call);
+    const estimate = estimateMaxCost(call, this.prices);
     if (estimate === null || !Number.isSafeInteger(estimate) || estimate <= 0) {
       return deny("unknown_cost", `no bounded price for ${call.kind} on ${call.model}`);
     }
 
     const { ledger, dispatcher, run } = this.opts;
+    try {
+      await dispatcher.preflight?.();
+    } catch (err) {
+      if (err instanceof PreDispatchError) return deny(err.reason, err.message);
+      throw err;
+    }
+
     const maxAttempts = 1 + this.bounds.maxRetries;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const r = await ledger.reserve({ amountNano: estimate, model: call.model, runId: run?.id, runCapNano: run?.capNano });
+      const r = await ledger.reserve({
+        amountNano: estimate,
+        model: call.model,
+        runId: run?.id,
+        runCapNano: run?.capNano,
+        businessId: call.businessId,
+        turnId: call.turnId,
+      });
       if (!r.granted) return deny(r.reason, r.detail);
 
       const started = this.now();
@@ -95,8 +114,8 @@ export class SpendGateway {
         result = { ok: false, status: 0, retryable: true, units: null, errorBody: errorText(err) };
       }
       const latencyMs = Math.round(this.now() - started);
-      const settledNano = actualCost(call, result.units) ?? estimate;
-      await ledger.settle(r.reservationId, settledNano);
+      const settledNano = actualCost(call, result.units, this.prices) ?? estimate;
+      await ledger.settle(r.reservationId, settledNano, usageOf(result.units));
       attempts.push({ attempt, status: result.status, reservedNano: estimate, settledNano, latencyMs });
 
       if (result.ok || !result.retryable || attempt === maxAttempts) {
@@ -105,6 +124,7 @@ export class SpendGateway {
           model: call.model,
           status: result.status,
           output: result.output,
+          toolCalls: result.toolCalls,
           errorBody: result.errorBody?.slice(0, ERROR_BODY_LIMIT),
           attempts,
           reservedNano: sum(attempts, "reservedNano"),
@@ -119,6 +139,12 @@ export class SpendGateway {
 
 function sum(attempts: AttemptRecord[], key: "reservedNano" | "settledNano" | "latencyMs"): number {
   return attempts.reduce((n, a) => n + a[key], 0);
+}
+
+function usageOf(units: BillingUnits | null): SpendUsage {
+  return units?.kind === "chat"
+    ? { tokensIn: units.promptTokens, tokensOut: units.completionTokens }
+    : { tokensIn: 0, tokensOut: 0 };
 }
 
 function errorText(err: unknown): string {

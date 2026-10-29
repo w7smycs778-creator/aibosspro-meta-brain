@@ -53,6 +53,20 @@ Deployment: Vercel project `aibosspro-brain-hackathon`, production at `https://a
 
 Live checks on production, 2026-10-28 12:54 IST: GET with a wrong verify token returned 403; GET with the correct token returned 200 with the challenge echoed; POST with a bad signature returned 401; POST with no signature returned 401; a correctly signed POST with no messages returned 200. No WhatsApp message was sent by these checks.
 
+### 2026-10-29 — Day 3A: storage interface, durable ledger, tool-call gateway
+
+Branch `day3a-storage`. No hosted model inference was run; all model calls in tests go to a scripted mock client.
+
+- Storage interface (`src/lib/storage/types.ts`): businesses with versioned brains and an approved flag, conversations with AUTO/HUMAN/PAUSED mode, turns with JSON checkpoints, pending approvals, bookings (created only together with the owner approval that gates them), spend ledger rows and processed-event ids. `reset()` wipes business data and reseeds one synthetic business (`src/lib/storage/seed.ts`, invented name, services, prices, hours and one discount rule); it keeps the spend ledger and processed-event ids so a reset cannot lift the cap or replay events.
+- Local store (`src/lib/storage/local-store.ts`): SQLite through better-sqlite3 in `./data/` (gitignored), survives restarts; atomic writes use IMMEDIATE transactions.
+- Supabase store (`src/lib/storage/supabase-store.ts`): same interface, service-role key, server only. New migration `supabase/migrations/20261029090000_storage_and_durable_ledger.sql`, NOT APPLIED: engine tables with RLS on, and ledger functions that take the cap from env and sum ledger rows under a lock instead of reading budget counters. Factory `STORAGE_BACKEND=local|supabase` (default local; local refused on a hosted deploy).
+- Durable spend ledger: `InMemorySpendLedger` removed; `StoreSpendLedger` writes one row per attempt (time, model, tokens in/out, estimate and settled nano-USD, business id, turn id) at reserve and settles it before the result is returned. Every cap check sums the stored rows. The server exits at start if `MODEL_SPEND_HARD_CAP_USD` is missing or above $130 (`src/instrumentation.ts`, `src/lib/startup.ts`).
+- Hosted-inference gate: the Meta dispatcher refuses before any network request unless `LIVE_CREDITS_VERIFIED=true`, `STORAGE_BACKEND=supabase`, the gateway's ledger is the Supabase store and its ledger table answers. It also refuses tool-bearing calls until tools are wired to the Meta API.
+- Durable dedupe: the WhatsApp route claims each message id in the processed-event store; the in-memory `MessageDedupe` is removed. If the store fails, already-claimed messages are answered and the route returns 503 so Meta redelivers the rest.
+- Gateway tool calls (`src/lib/gateway/types.ts`, `tools.ts`, `tool-loop.ts`, `mock-client.ts`): typed tool definitions, tool-call request/result types, a run loop that offers and executes only tools permitted by deterministic code (PAUSED: none, HUMAN: read-only, AUTO: all; write tools only create pending records), checkpoints every call and result as a turn, and hands to the owner on a refused tool, a denied or failed model call, or `TOOL_LOOP_MAX_ITERATIONS` (default 6). `MockModelClient` returns scripted tool calls for tests.
+- Removed the unused `META_WEBHOOK_VERIFY_TOKEN` from `.env.example` (the route reads `WHATSAPP_VERIFY_TOKEN`); documented the new variables.
+- Tests: `src/lib/storage/day3a.test.ts` (ledger cap $1.00 with three $0.40 mock calls, durable dedupe across reopen, permitted and refused tool calls, max iterations, gate refusals, startup refusal, reset) and the existing gateway tests moved onto the durable ledger. Full suite 40/40, typecheck and `next build` clean.
+
 ## Third-party
 
 ## Day 2 close — 2026-10-28 (channel live)

@@ -1,9 +1,12 @@
 // The only module that talks to the Meta Model API. It is constructed by
 // createLiveGateway() and must never be called except through SpendGateway.
-import { LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
+import type { Storage } from "../storage/types";
+import { HostedInferenceBlockedError, LiveCreditsNotVerifiedError, PreDispatchError } from "./errors";
 import type { BillingUnits, DispatchResult, Dispatcher, Env, ModelCall } from "./types";
 
 type FetchFn = typeof fetch;
+/** The store holding the spend ledger this dispatcher's gateway writes to. */
+type LedgerProbe = Pick<Storage, "backend" | "ping">;
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const ERROR_BODY_LIMIT = 2_000;
@@ -12,11 +15,35 @@ export class MetaDispatcher implements Dispatcher {
   constructor(
     private readonly env: Env = process.env,
     private readonly fetchFn: FetchFn = fetch,
+    private readonly ledgerStore?: LedgerProbe,
   ) {}
 
-  async dispatch(call: ModelCall): Promise<DispatchResult> {
-    // Read at call time so the guard cannot be bypassed by early construction.
+  /** Hosted inference gate, run by the gateway before any reservation. */
+  async preflight(): Promise<void> {
+    this.assertHostedAllowed();
+    try {
+      await this.ledgerStore!.ping();
+    } catch {
+      throw new HostedInferenceBlockedError("the Supabase spend ledger table is unreachable");
+    }
+  }
+
+  // Read at call time so the guard cannot be bypassed by early construction.
+  private assertHostedAllowed(): void {
     if (this.env.LIVE_CREDITS_VERIFIED !== "true") throw new LiveCreditsNotVerifiedError();
+    if (this.env.STORAGE_BACKEND !== "supabase") {
+      throw new HostedInferenceBlockedError("STORAGE_BACKEND is not 'supabase', so the spend ledger is not durable in Postgres");
+    }
+    if (this.ledgerStore?.backend !== "supabase") {
+      throw new HostedInferenceBlockedError("the gateway's spend ledger is not the Supabase store");
+    }
+  }
+
+  async dispatch(call: ModelCall): Promise<DispatchResult> {
+    this.assertHostedAllowed();
+    if (call.kind === "chat" && call.tools) {
+      throw new PreDispatchError("tools_not_supported", "tool calls are not wired to the Meta Model API yet");
+    }
     const baseUrl = this.env.MODEL_API_BASE_URL?.replace(/\/+$/, "");
     if (!baseUrl || !baseUrl.startsWith("https://")) {
       throw new PreDispatchError("dispatcher_not_configured", "MODEL_API_BASE_URL is missing or not https");

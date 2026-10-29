@@ -15,6 +15,8 @@ export type ReserveRequest = {
   runId?: string;
   /** Optional cap on settled + reserved spend within runId. */
   runCapNano?: NanoUsd;
+  businessId?: string;
+  turnId?: string;
 };
 
 export type ReserveResult =
@@ -28,97 +30,62 @@ export type LedgerSnapshot = {
   runReservedNano: NanoUsd;
 };
 
+/** Provider-reported tokens for one settled attempt; zero for non-chat models. */
+export type SpendUsage = { tokensIn: number; tokensOut: number };
+
 /**
  * Spend ledger. reserve() must check every limit and record the reservation
  * atomically: no two concurrent reservations may both pass a check that only
- * one of them fits. The Supabase implementation does this under a row lock
- * (supabase/migrations/20261027120000_model_spend_ledger.sql).
+ * one of them fits.
  */
 export interface SpendLedger {
   reserve(req: ReserveRequest): Promise<ReserveResult>;
   /** Replace a reservation with its actual cost (may exceed the reservation). */
-  settle(reservationId: string, actualNano: NanoUsd): Promise<void>;
+  settle(reservationId: string, actualNano: NanoUsd, usage?: SpendUsage): Promise<void>;
   /** Drop a reservation for an attempt that never reached the provider. */
   release(reservationId: string): Promise<void>;
   snapshot(runId?: string): Promise<LedgerSnapshot>;
 }
 
-type Entry = { runId?: string; model: string; reservedNano: NanoUsd; state: "reserved" | "settled" | "released"; settledNano: NanoUsd };
+/**
+ * Durable ledger rows. Every limit check sums the stored rows inside one
+ * transaction (LocalStore: SQLite immediate transaction; SupabaseStore: row
+ * lock in reserve_model_spend), never a counter held in memory.
+ */
+export interface SpendLedgerStore {
+  reserveSpend(req: ReserveRequest, limits: LedgerLimits): Promise<ReserveResult>;
+  settleSpend(reservationId: string, actualNano: NanoUsd, usage: SpendUsage): Promise<void>;
+  releaseSpend(reservationId: string): Promise<void>;
+  spendTotals(runId?: string): Promise<LedgerSnapshot>;
+}
 
-export class InMemorySpendLedger implements SpendLedger {
-  private readonly entries = new Map<string, Entry>();
-  private settled = 0;
-  private reserved = 0;
-  private nextId = 1;
+const NO_USAGE: SpendUsage = { tokensIn: 0, tokensOut: 0 };
 
-  constructor(private readonly limits: LedgerLimits) {}
+export class StoreSpendLedger implements SpendLedger {
+  constructor(
+    private readonly store: SpendLedgerStore,
+    private readonly limits: LedgerLimits,
+  ) {}
 
-  // The body runs synchronously with no await between check and write, so on
-  // the single JS event loop each reservation is atomic.
   async reserve(req: ReserveRequest): Promise<ReserveResult> {
-    const amount = req.amountNano;
-    if (!Number.isSafeInteger(amount) || amount <= 0) {
-      throw new RangeError(`reservation must be a positive integer nano-USD amount: ${amount}`);
+    if (!Number.isSafeInteger(req.amountNano) || req.amountNano <= 0) {
+      throw new RangeError(`reservation must be a positive integer nano-USD amount: ${req.amountNano}`);
     }
-    const committed = this.settled + this.reserved;
-    if (committed + amount > this.limits.hardCapNano) {
-      return { granted: false, reason: "hard_cap_reached", detail: `committed ${committed} + ${amount} > cap ${this.limits.hardCapNano}` };
-    }
-    const spendable = this.limits.creditBalanceNano - this.limits.bufferNano - committed;
-    if (amount > spendable) {
-      return { granted: false, reason: "insufficient_credit", detail: `spendable ${spendable} after buffer < ${amount}` };
-    }
-    if (req.runCapNano !== undefined) {
-      const run = this.runTotals(req.runId);
-      const runCommitted = run.runSettledNano + run.runReservedNano;
-      if (runCommitted + amount > req.runCapNano) {
-        return { granted: false, reason: "run_cap_reached", detail: `run ${runCommitted} + ${amount} > run cap ${req.runCapNano}` };
-      }
-    }
-    const reservationId = `r${this.nextId++}`;
-    this.entries.set(reservationId, { runId: req.runId, model: req.model, reservedNano: amount, state: "reserved", settledNano: 0 });
-    this.reserved += amount;
-    return { granted: true, reservationId };
+    return this.store.reserveSpend(req, this.limits);
   }
 
-  async settle(reservationId: string, actualNano: NanoUsd): Promise<void> {
+  async settle(reservationId: string, actualNano: NanoUsd, usage: SpendUsage = NO_USAGE): Promise<void> {
     if (!Number.isSafeInteger(actualNano) || actualNano < 0) {
       throw new RangeError(`settlement must be a non-negative integer nano-USD amount: ${actualNano}`);
     }
-    const e = this.open(reservationId);
-    this.reserved -= e.reservedNano;
-    this.settled += actualNano;
-    e.state = "settled";
-    e.settledNano = actualNano;
+    await this.store.settleSpend(reservationId, actualNano, usage);
   }
 
   async release(reservationId: string): Promise<void> {
-    const e = this.open(reservationId);
-    this.reserved -= e.reservedNano;
-    e.state = "released";
+    await this.store.releaseSpend(reservationId);
   }
 
   async snapshot(runId?: string): Promise<LedgerSnapshot> {
-    return { settledNano: this.settled, reservedNano: this.reserved, ...this.runTotals(runId) };
-  }
-
-  private open(reservationId: string): Entry {
-    const e = this.entries.get(reservationId);
-    if (!e || e.state !== "reserved") {
-      throw new Error(`reservation ${reservationId} is not open`);
-    }
-    return e;
-  }
-
-  private runTotals(runId?: string): { runSettledNano: NanoUsd; runReservedNano: NanoUsd } {
-    let runSettledNano = 0;
-    let runReservedNano = 0;
-    if (runId === undefined) return { runSettledNano, runReservedNano };
-    for (const e of this.entries.values()) {
-      if (e.runId !== runId) continue;
-      if (e.state === "reserved") runReservedNano += e.reservedNano;
-      if (e.state === "settled") runSettledNano += e.settledNano;
-    }
-    return { runSettledNano, runReservedNano };
+    return this.store.spendTotals(runId);
   }
 }

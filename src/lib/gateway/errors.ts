@@ -18,3 +18,10 @@ export class LiveCreditsNotVerifiedError extends PreDispatchError {
     super("live_credits_not_verified", "LIVE_CREDITS_VERIFIED is not 'true'; the Meta dispatcher is blocked");
   }
 }
+
+/** Hosted inference needs LIVE_CREDITS_VERIFIED=true, STORAGE_BACKEND=supabase and a reachable ledger. */
+export class HostedInferenceBlockedError extends PreDispatchError {
+  constructor(why: string) {
+    super("hosted_inference_blocked", `hosted inference blocked: ${why}`);
+  }
+}

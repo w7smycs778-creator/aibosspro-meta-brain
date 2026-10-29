@@ -1,0 +1,186 @@
+// The one storage interface for the engine. LocalStore (SQLite under ./data)
+// and SupabaseStore (Postgres, service role, server only) both implement it.
+import type { LedgerSnapshot, SpendLedgerStore } from "../gateway/ledger";
+import type { NanoUsd } from "../gateway/money";
+
+export type StorageBackend = "local" | "supabase";
+
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+export type Service = { id: string; name: string; durationMin: number; priceCents: number };
+
+export type DiscountRule = {
+  id: string;
+  description: string;
+  serviceId: string;
+  percentOff: number;
+  weekdays: Weekday[];
+};
+
+/** What the engine knows about one business. Owner-reviewed before it is used. */
+export type BusinessBrain = {
+  name: string;
+  timezone: string;
+  currency: string;
+  services: Service[];
+  /** Opening windows per weekday as [open, close] in local "HH:MM"; empty = closed. */
+  hours: Record<Weekday, Array<[string, string]>>;
+  discounts: DiscountRule[];
+};
+
+export type Business = { id: string; name: string; createdAt: string };
+
+export type BrainVersion = {
+  businessId: string;
+  version: number;
+  brain: BusinessBrain;
+  approved: boolean;
+  createdAt: string;
+  approvedAt: string | null;
+};
+
+export type ConversationMode = "AUTO" | "HUMAN" | "PAUSED";
+export type ConversationState = "active" | "owner_help" | "closed";
+export type Channel = "whatsapp" | "web";
+
+export type Conversation = {
+  id: string;
+  businessId: string;
+  channel: Channel;
+  customerRef: string;
+  mode: ConversationMode;
+  state: ConversationState;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TurnRole = "customer" | "assistant" | "tool" | "owner" | "system";
+
+/** JSON state recorded with a turn so a conversation can be inspected or resumed. */
+export type Checkpoint = Record<string, unknown>;
+
+export type Turn = {
+  id: string;
+  conversationId: string;
+  /** Monotonic across the store; order turns by it. */
+  seq: number;
+  role: TurnRole;
+  content: string;
+  checkpoint: Checkpoint | null;
+  createdAt: string;
+};
+
+export type ApprovalKind = "booking" | "publication";
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+export type PendingApproval = {
+  id: string;
+  businessId: string;
+  conversationId: string | null;
+  kind: ApprovalKind;
+  payload: Record<string, unknown>;
+  status: ApprovalStatus;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export type BookingStatus = "pending_approval" | "confirmed" | "rejected" | "cancelled";
+
+export type Booking = {
+  id: string;
+  businessId: string;
+  conversationId: string | null;
+  serviceId: string;
+  customerRef: string;
+  startsAt: string;
+  status: BookingStatus;
+  approvalId: string | null;
+  createdAt: string;
+};
+
+export type SpendEntry = {
+  id: string;
+  createdAt: string;
+  model: string;
+  runId: string | null;
+  businessId: string | null;
+  turnId: string | null;
+  tokensIn: number;
+  tokensOut: number;
+  /** Conservative estimate reserved before dispatch. */
+  reservedNano: NanoUsd;
+  /** Actual cost once settled; null while reserved or after release. */
+  settledNano: NanoUsd | null;
+  state: "reserved" | "settled" | "released";
+};
+
+export type NewConversation = {
+  businessId: string;
+  channel: Channel;
+  customerRef: string;
+  /** Defaults to HUMAN: the AI acts only after the owner switches to AUTO. */
+  mode?: ConversationMode;
+};
+
+export type NewTurn = {
+  conversationId: string;
+  role: TurnRole;
+  content: string;
+  checkpoint?: Checkpoint | null;
+};
+
+export type NewBookingRequest = {
+  businessId: string;
+  conversationId: string | null;
+  serviceId: string;
+  customerRef: string;
+  startsAt: string;
+};
+
+export type NewApproval = {
+  businessId: string;
+  conversationId: string | null;
+  kind: ApprovalKind;
+  payload: Record<string, unknown>;
+};
+
+export interface Storage extends SpendLedgerStore {
+  readonly backend: StorageBackend;
+  /** Throws unless the store, including the spend ledger table, is reachable. */
+  ping(): Promise<void>;
+  close(): Promise<void>;
+  /**
+   * Wipes every business with its brains, conversations, turns, approvals and
+   * bookings, then seeds the one synthetic business. The spend ledger and the
+   * processed-event ids are kept: wiping them would reset the cap and replay
+   * events.
+   */
+  reset(): Promise<{ businessId: string }>;
+
+  getBusiness(id: string): Promise<Business | null>;
+  /** Stores the next version, unapproved. */
+  addBrainVersion(businessId: string, brain: BusinessBrain): Promise<BrainVersion>;
+  approveBrainVersion(businessId: string, version: number): Promise<BrainVersion>;
+  /** Latest version, or latest approved version with approvedOnly. */
+  getBrain(businessId: string, opts?: { approvedOnly?: boolean }): Promise<BrainVersion | null>;
+
+  createConversation(input: NewConversation): Promise<Conversation>;
+  getConversation(id: string): Promise<Conversation | null>;
+  updateConversation(id: string, patch: { mode?: ConversationMode; state?: ConversationState }): Promise<Conversation>;
+  appendTurn(input: NewTurn): Promise<Turn>;
+  listTurns(conversationId: string): Promise<Turn[]>;
+
+  /** Creates a pending booking and the owner approval that gates it. */
+  requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval }>;
+  createApproval(input: NewApproval): Promise<PendingApproval>;
+  /** Decides a pending approval; a linked booking becomes confirmed or rejected. */
+  decideApproval(id: string, decision: "approved" | "rejected"): Promise<PendingApproval>;
+  listPendingApprovals(businessId: string): Promise<PendingApproval[]>;
+  listBookings(businessId: string): Promise<Booking[]>;
+
+  listSpend(): Promise<SpendEntry[]>;
+  spendTotals(runId?: string): Promise<LedgerSnapshot>;
+
+  /** Records an event id; true the first time, false on every repeat. */
+  claimEvent(source: string, eventId: string): Promise<boolean>;
+}

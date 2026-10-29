@@ -1,12 +1,11 @@
 import { after } from "next/server";
 import { sendText } from "@/lib/whatsapp/send";
 import { safeEqual, verifySignature } from "@/lib/whatsapp/signature";
-import { MessageDedupe, extractTextMessages, last4, replyText } from "@/lib/whatsapp/webhook";
+import { getStore } from "@/lib/storage";
+import { extractTextMessages, last4, replyText, type InboundText } from "@/lib/whatsapp/webhook";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const dedupe = new MessageDedupe();
 
 /** Meta verification handshake. */
 export function GET(req: Request): Response {
@@ -34,7 +33,20 @@ export async function POST(req: Request): Promise<Response> {
     return new Response("OK", { status: 200 });
   }
 
-  const fresh = extractTextMessages(payload).filter((m) => dedupe.claim(m.id));
+  // Durable dedupe: an id is claimed once in the store, across instances and restarts.
+  const fresh: InboundText[] = [];
+  let storeError: unknown = null;
+  const inbound = extractTextMessages(payload);
+  if (inbound.length) {
+    try {
+      const store = await getStore();
+      for (const m of inbound) {
+        if (await store.claimEvent("whatsapp", m.id)) fresh.push(m);
+      }
+    } catch (err) {
+      storeError = err;
+    }
+  }
   if (fresh.length) {
     after(async () => {
       for (const m of fresh) {
@@ -47,6 +59,12 @@ export async function POST(req: Request): Promise<Response> {
         }
       }
     });
+  }
+  if (storeError) {
+    // Claimed messages are answered above; the rest were never claimed, so a
+    // non-2xx makes Meta redeliver them.
+    console.error("whatsapp dedupe store unavailable", { error: (storeError as Error).name });
+    return new Response("Service Unavailable", { status: 503 });
   }
   return new Response("OK", { status: 200 });
 }
