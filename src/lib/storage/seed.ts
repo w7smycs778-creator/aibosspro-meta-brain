@@ -6,13 +6,15 @@ export const SEED_BUSINESS_ID = "biz_demo_harbor_lane";
 
 export const SEED_BRAIN: BusinessBrain = {
   name: "Harbor Lane Barbers (demo)",
-  timezone: "America/New_York",
+  timezone: "Asia/Jerusalem",
+  languages: ["English", "Hebrew"],
+  tone: { adjectives: ["friendly", "brief", "upbeat"], example: "Happy to help, we have a spot for you." },
   currency: "USD",
   services: [
-    { id: "classic_cut", name: "Classic cut", durationMin: 30, priceCents: 3_500 },
-    { id: "beard_trim", name: "Beard trim", durationMin: 15, priceCents: 2_000 },
-    { id: "cut_and_beard", name: "Cut + beard", durationMin: 45, priceCents: 5_000 },
-    { id: "kids_cut", name: "Kids cut (under 12)", durationMin: 20, priceCents: 2_500 },
+    { id: "classic_cut", name: "Classic cut", durationMin: 30, priceCents: 3_500, currency: "USD" },
+    { id: "beard_trim", name: "Beard trim", durationMin: 15, priceCents: 2_000, currency: "USD" },
+    { id: "cut_and_beard", name: "Cut + beard", durationMin: 45, priceCents: 5_000, currency: "USD" },
+    { id: "kids_cut", name: "Kids cut (under 12)", durationMin: 20, priceCents: 2_500, currency: "USD" },
   ],
   hours: {
     mon: [["09:00", "18:00"]],
@@ -27,9 +29,13 @@ export const SEED_BRAIN: BusinessBrain = {
     {
       id: "tuesday_combo",
       description: "10% off Cut + beard on Tuesdays",
-      serviceId: "cut_and_beard",
       percentOff: 10,
+      amountOffCents: null,
+      serviceIds: ["cut_and_beard"],
       weekdays: ["tue"],
+      conditions: "",
     },
   ],
+  bookingPolicy: { approvalRequired: true },
+  doNotSay: [],
 };

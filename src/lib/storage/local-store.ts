@@ -10,10 +10,12 @@ import { resolve, sep } from "node:path";
 import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, SpendUsage } from "../gateway/ledger";
 import type { NanoUsd } from "../gateway/money";
 import { StorageConfigError } from "./errors";
+import { upgradeBrain } from "./brain";
 import { bookingPayload } from "./payload";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
 import type {
   Booking,
+  BrainSource,
   BrainVersion,
   Business,
   BusinessBrain,
@@ -33,16 +35,24 @@ import type {
 
 export const LOCAL_DB_FILE = "meta-brain.sqlite";
 /**
- * Bumped when SCHEMA changes shape. v2 files are migrated in place (columns
- * added, rows kept); anything older is refused.
+ * Bumped when SCHEMA changes shape. v2 and v3 files are migrated in place
+ * (columns added, rows kept); anything older is refused.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+const MIGRATABLE_VERSIONS = new Set([2, 3]);
 
 /** Ledger columns added in v3, applied to v2 files by ALTER TABLE. */
 const V3_LEDGER_COLUMNS: Array<[name: string, ddl: string]> = [
   ["finish_reason", "finish_reason text"],
   ["reasoning_tokens", "reasoning_tokens integer check (reasoning_tokens >= 0)"],
   ["usage_raw", "usage_raw text"],
+];
+
+/** Brain-version columns added in v4: where a draft came from. */
+const V4_BRAIN_COLUMNS: Array<[name: string, ddl: string]> = [
+  ["source_kind", "source_kind text"],
+  ["source_text", "source_text text"],
+  ["audio_path", "audio_path text"],
 ];
 
 const SCHEMA = `
@@ -58,6 +68,9 @@ create table if not exists brain_versions (
   approved integer not null default 0,
   created_at text not null,
   approved_at text,
+  source_kind text,
+  source_text text,
+  audio_path text,
   primary key (business_id, version)
 );
 create table if not exists conversations (
@@ -190,7 +203,10 @@ export class LocalStore implements Storage {
         const at = now();
         this.db.prepare("insert into businesses (id, name, created_at) values (?, ?, ?)").run(SEED_BUSINESS_ID, SEED_BRAIN.name, at);
         this.db
-          .prepare("insert into brain_versions (business_id, version, brain, approved, created_at, approved_at) values (?, 1, ?, 1, ?, ?)")
+          .prepare(
+            `insert into brain_versions (business_id, version, brain, approved, created_at, approved_at, source_kind)
+             values (?, 1, ?, 1, ?, ?, 'seed')`,
+          )
           .run(SEED_BUSINESS_ID, JSON.stringify(SEED_BRAIN), at, at);
       })
       .immediate();
@@ -202,18 +218,39 @@ export class LocalStore implements Storage {
     return r ? { id: r.id, name: r.name, createdAt: r.created_at } : null;
   }
 
-  async addBrainVersion(businessId: string, brain: BusinessBrain): Promise<BrainVersion> {
+  async addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion> {
     return this.db
       .transaction(() => {
         const { v } = this.db
           .prepare("select coalesce(max(version), 0) + 1 as v from brain_versions where business_id = ?")
           .get(businessId) as Row;
         this.db
-          .prepare("insert into brain_versions (business_id, version, brain, approved, created_at) values (?, ?, ?, 0, ?)")
-          .run(businessId, v, JSON.stringify(brain), now());
+          .prepare(
+            `insert into brain_versions (business_id, version, brain, approved, created_at, source_kind, source_text, audio_path)
+             values (?, ?, ?, 0, ?, ?, ?, ?)`,
+          )
+          .run(businessId, v, JSON.stringify(brain), now(), source?.kind ?? null, source?.text ?? null, source?.audioPath ?? null);
         return this.brainRow(businessId, v)!;
       })
       .immediate();
+  }
+
+  async updateBrainDraft(businessId: string, version: number, brain: BusinessBrain): Promise<BrainVersion> {
+    const res = this.db
+      .prepare("update brain_versions set brain = ? where business_id = ? and version = ? and approved = 0")
+      .run(JSON.stringify(brain), businessId, version);
+    if (res.changes === 0) throw new Error(`brain version ${version} is not an unapproved draft of ${businessId}`);
+    return this.brainRow(businessId, version)!;
+  }
+
+  async deleteBrainDraft(businessId: string, version: number): Promise<boolean> {
+    return (
+      this.db.prepare("delete from brain_versions where business_id = ? and version = ? and approved = 0").run(businessId, version).changes === 1
+    );
+  }
+
+  async listBrainVersions(businessId: string): Promise<BrainVersion[]> {
+    return (this.db.prepare("select * from brain_versions where business_id = ? order by version desc").all(businessId) as Row[]).map(toBrain);
   }
 
   async approveBrainVersion(businessId: string, version: number): Promise<BrainVersion> {
@@ -461,38 +498,49 @@ function prepare(db: Database.Database, file: string): Database.Database {
   db.pragma("foreign_keys = ON");
   const version = db.pragma("user_version", { simple: true }) as number;
   const hasTables = (db.prepare("select count(*) as n from sqlite_master where type = 'table'").get() as Row).n > 0;
-  if (hasTables && version !== SCHEMA_VERSION && version !== 2) {
+  if (hasTables && version !== SCHEMA_VERSION && !MIGRATABLE_VERSIONS.has(version)) {
     db.close();
-    throw new StorageConfigError(`local store ${file} has schema v${version}, expected v2 or v${SCHEMA_VERSION}; move the file aside and reopen`);
+    throw new StorageConfigError(`local store ${file} has schema v${version}, expected v2-v${SCHEMA_VERSION}; move the file aside and reopen`);
   }
   db.transaction(() => {
     db.exec(SCHEMA);
     migrateV2ToV3(db);
+    migrateV3ToV4(db);
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }).immediate();
   return db;
 }
 
-/** Adds the v3 ledger columns that are missing; rows are untouched. Safe to run repeatedly. */
-export function migrateV2ToV3(db: Database.Database): string[] {
-  const have = new Set((db.prepare("pragma table_info(model_spend_reservations)").all() as Row[]).map((c) => c.name));
+function addMissingColumns(db: Database.Database, table: string, columns: Array<[string, string]>): string[] {
+  const have = new Set((db.prepare(`pragma table_info(${table})`).all() as Row[]).map((c) => c.name));
   const added: string[] = [];
-  for (const [name, ddl] of V3_LEDGER_COLUMNS) {
+  for (const [name, ddl] of columns) {
     if (have.has(name)) continue;
-    db.exec(`alter table model_spend_reservations add column ${ddl}`);
+    db.exec(`alter table ${table} add column ${ddl}`);
     added.push(name);
   }
   return added;
+}
+
+/** Adds the v4 brain-source columns that are missing; rows are untouched. Safe to run repeatedly. */
+export function migrateV3ToV4(db: Database.Database): string[] {
+  return addMissingColumns(db, "brain_versions", V4_BRAIN_COLUMNS);
+}
+
+/** Adds the v3 ledger columns that are missing; rows are untouched. Safe to run repeatedly. */
+export function migrateV2ToV3(db: Database.Database): string[] {
+  return addMissingColumns(db, "model_spend_reservations", V3_LEDGER_COLUMNS);
 }
 
 function toBrain(r: Row): BrainVersion {
   return {
     businessId: r.business_id,
     version: r.version,
-    brain: JSON.parse(r.brain),
+    brain: upgradeBrain(JSON.parse(r.brain)),
     approved: r.approved === 1,
     createdAt: r.created_at,
     approvedAt: r.approved_at ?? null,
+    source: r.source_kind ? { kind: r.source_kind, text: r.source_text ?? null, audioPath: r.audio_path ?? null } : null,
   };
 }
 

@@ -17,3 +17,10 @@ export async function readJson(req: Request): Promise<Record<string, unknown> | 
     return null;
   }
 }
+
+/** Maps an OnboardingError (or any error with a numeric status) to a JSON response. */
+export function errorResponse(err: unknown): Response {
+  const e = err as { message?: string; status?: unknown; details?: Record<string, unknown> };
+  if (typeof e?.status === "number") return json({ error: e.message, ...(e.details ?? {}) }, e.status);
+  return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+}

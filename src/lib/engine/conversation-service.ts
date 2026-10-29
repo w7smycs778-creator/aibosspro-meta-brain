@@ -6,6 +6,7 @@ import type { ChatMessage } from "../gateway/types";
 import { SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
 import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
+import { brainFacts } from "./brain-prompt";
 import { localDate, weekdayOf } from "./time";
 import { ENGINE_TOOLS } from "./tools";
 import { latestAvailability, verifyText, verifyToolCall, type Facts } from "./verifier";
@@ -87,7 +88,7 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       conversationId: conversation.id,
       turnId: customerTurn.id,
       model: d.model,
-      messages: buildMessages(brainVersion.brain, history, input.text, d.now()),
+      messages: buildMessages(brainVersion.brain, brainVersion.version, history, input.text, d.now()),
       maxOutputTokens: ENGINE_MAX_OUTPUT_TOKENS,
       reasoningEffort: ENGINE_REASONING_EFFORT,
       verify: (step) => verifyStep(store, conversation.id, brainVersion.brain, step),
@@ -139,13 +140,14 @@ function pendingApprovalFrom(trace: Turn[]): string | undefined {
   return undefined;
 }
 
-function buildMessages(brain: BusinessBrain, history: Turn[], text: string, now: Date): ChatMessage[] {
+export function buildMessages(brain: BusinessBrain, version: number, history: Turn[], text: string, now: Date): ChatMessage[] {
   const today = localDate(now, brain.timezone);
   const availability = latestAvailability(history);
   const system = [
     `You are the AI booking assistant for ${brain.name}. Customers know they are talking to an AI.`,
     `Today is ${today} (${weekdayOf(today)}), time zone ${brain.timezone}.`,
-    "Use the tools for every fact about services, prices, discounts, hours and availability; never invent one.",
+    brainFacts(brain, version),
+    "Never invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.",
     "Offer only start times returned by check_availability. Request a booking only for a slot it returned.",
     "A booking is never confirmed by you: request_booking creates a pending request that the owner approves.",
     "If the customer needs anything the tools cannot do, call request_owner_help.",

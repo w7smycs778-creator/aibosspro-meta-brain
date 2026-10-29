@@ -1,6 +1,6 @@
 // Postgres store through Supabase with the service-role key. Server only: the
 // key bypasses RLS, so this module must never be imported by client code.
-// Tables and ledger functions: supabase/migrations/ (20261027120000, 20261029090000, 20261029150000, 20261029190000).
+// Tables and ledger functions: supabase/migrations/ (20261027120000 through 20261029200000).
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../gateway/types";
@@ -8,9 +8,11 @@ import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, Spend
 import type { NanoUsd } from "../gateway/money";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
 import { StorageConfigError } from "./errors";
+import { upgradeBrain } from "./brain";
 import { bookingPayload } from "./payload";
 import type {
   Booking,
+  BrainSource,
   BrainVersion,
   Business,
   BusinessBrain,
@@ -75,7 +77,7 @@ export class SupabaseStore implements Storage {
     check(
       await this.db
         .from("brain_versions")
-        .insert({ business_id: SEED_BUSINESS_ID, version: 1, brain: SEED_BRAIN, approved: true, created_at: at, approved_at: at }),
+        .insert({ business_id: SEED_BUSINESS_ID, version: 1, brain: SEED_BRAIN, approved: true, created_at: at, approved_at: at, source_kind: "seed" }),
       "reset brain",
     );
     return { businessId: SEED_BUSINESS_ID };
@@ -86,17 +88,56 @@ export class SupabaseStore implements Storage {
     return r ? { id: r.id, name: r.name, createdAt: r.created_at } : null;
   }
 
-  async addBrainVersion(businessId: string, brain: BusinessBrain): Promise<BrainVersion> {
+  async addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion> {
     const latest = await this.getBrain(businessId);
     const r = check(
       await this.db
         .from("brain_versions")
-        .insert({ business_id: businessId, version: (latest?.version ?? 0) + 1, brain, approved: false })
+        .insert({
+          business_id: businessId,
+          version: (latest?.version ?? 0) + 1,
+          brain,
+          approved: false,
+          source_kind: source?.kind ?? null,
+          source_text: source?.text ?? null,
+          audio_path: source?.audioPath ?? null,
+        })
         .select()
         .single(),
       "addBrainVersion",
     );
     return toBrain(r);
+  }
+
+  async updateBrainDraft(businessId: string, version: number, brain: BusinessBrain): Promise<BrainVersion> {
+    const rows = check(
+      await this.db
+        .from("brain_versions")
+        .update({ brain })
+        .eq("business_id", businessId)
+        .eq("version", version)
+        .eq("approved", false)
+        .select(),
+      "updateBrainDraft",
+    ) as Row[];
+    if (rows.length === 0) throw new Error(`brain version ${version} is not an unapproved draft of ${businessId}`);
+    return toBrain(rows[0]);
+  }
+
+  async deleteBrainDraft(businessId: string, version: number): Promise<boolean> {
+    const rows = check(
+      await this.db.from("brain_versions").delete().eq("business_id", businessId).eq("version", version).eq("approved", false).select(),
+      "deleteBrainDraft",
+    ) as Row[];
+    return rows.length === 1;
+  }
+
+  async listBrainVersions(businessId: string): Promise<BrainVersion[]> {
+    const rows = check(
+      await this.db.from("brain_versions").select("*").eq("business_id", businessId).order("version", { ascending: false }),
+      "listBrainVersions",
+    );
+    return (rows as Row[]).map(toBrain);
   }
 
   async approveBrainVersion(businessId: string, version: number): Promise<BrainVersion> {
@@ -386,10 +427,11 @@ function toBrain(r: Row): BrainVersion {
   return {
     businessId: r.business_id,
     version: r.version,
-    brain: r.brain,
+    brain: upgradeBrain(r.brain),
     approved: r.approved,
     createdAt: r.created_at,
     approvedAt: r.approved_at ?? null,
+    source: r.source_kind ? { kind: r.source_kind, text: r.source_text ?? null, audioPath: r.audio_path ?? null } : null,
   };
 }
 

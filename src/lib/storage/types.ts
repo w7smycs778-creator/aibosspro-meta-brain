@@ -7,28 +7,49 @@ export type StorageBackend = "local" | "supabase";
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 
-export type Service = { id: string; name: string; durationMin: number; priceCents: number };
+export type Service = { id: string; name: string; durationMin: number; priceCents: number; currency: string };
 
+/** A percent or fixed amount off; empty serviceIds and weekdays mean every service and every day. */
 export type DiscountRule = {
   id: string;
   description: string;
-  serviceId: string;
-  percentOff: number;
+  percentOff: number | null;
+  amountOffCents: number | null;
+  serviceIds: string[];
   weekdays: Weekday[];
+  /** Any other condition, as the owner said it. */
+  conditions: string;
 };
 
 /** What the engine knows about one business. Owner-reviewed before it is used. */
 export type BusinessBrain = {
   name: string;
   timezone: string;
+  /** Languages the business answers in, e.g. ["English", "Hebrew"]. */
+  languages: string[];
+  /** 3-5 adjectives and one example sentence in the business's voice. */
+  tone: { adjectives: string[]; example: string };
+  /** Default currency (ISO code) for prices. */
   currency: string;
   services: Service[];
   /** Opening windows per weekday as [open, close] in local "HH:MM"; empty = closed. */
   hours: Record<Weekday, Array<[string, string]>>;
   discounts: DiscountRule[];
+  /** Tier 1: every booking needs owner approval. */
+  bookingPolicy: { approvalRequired: true };
+  /** Phrases or topics the assistant must not use. */
+  doNotSay: string[];
 };
 
 export type Business = { id: string; name: string; createdAt: string };
+
+export type BrainSource = {
+  kind: "voice" | "text" | "seed";
+  /** Transcript or typed text the draft was extracted from. */
+  text: string | null;
+  /** Local path of the stored voice note, under ./data/audio/. */
+  audioPath: string | null;
+};
 
 export type BrainVersion = {
   businessId: string;
@@ -37,6 +58,7 @@ export type BrainVersion = {
   approved: boolean;
   createdAt: string;
   approvedAt: string | null;
+  source: BrainSource | null;
 };
 
 export type ConversationMode = "AUTO" | "HUMAN" | "PAUSED";
@@ -177,8 +199,14 @@ export interface Storage extends SpendLedgerStore {
 
   getBusiness(id: string): Promise<Business | null>;
   /** Stores the next version, unapproved. */
-  addBrainVersion(businessId: string, brain: BusinessBrain): Promise<BrainVersion>;
+  addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion>;
+  /** Replaces the brain of an unapproved version; approved versions are immutable. */
+  updateBrainDraft(businessId: string, version: number, brain: BusinessBrain): Promise<BrainVersion>;
+  /** Deletes an unapproved version; true if one was deleted. */
+  deleteBrainDraft(businessId: string, version: number): Promise<boolean>;
   approveBrainVersion(businessId: string, version: number): Promise<BrainVersion>;
+  /** Every version, newest first. */
+  listBrainVersions(businessId: string): Promise<BrainVersion[]>;
   /** Latest version, or latest approved version with approvedOnly. */
   getBrain(businessId: string, opts?: { approvedOnly?: boolean }): Promise<BrainVersion | null>;
 

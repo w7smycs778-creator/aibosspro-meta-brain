@@ -60,7 +60,7 @@ const AVAIL: AvailabilityResult = {
   date: DEMO_DATE,
   weekday: "thu",
   service: { id: "cut_and_beard", name: "Cut + beard", durationMin: 45, priceCents: 5000 },
-  slots: [{ slot: `${DEMO_DATE}T10:00`, time: "10:00", startsAt: "2026-11-05T15:00:00.000Z" }],
+  slots: [{ slot: `${DEMO_DATE}T10:00`, time: "10:00", startsAt: "2026-11-05T08:00:00.000Z" }],
 };
 const facts = (over: Partial<Facts> = {}): Facts => ({ brain: SEED_BRAIN, availability: AVAIL, bookings: [], ...over });
 
@@ -74,7 +74,7 @@ describe("Step 7a mock run", () => {
     const conversationId = results[0].conversationId!;
     const turns = await s.listTurns(conversationId);
     const [booking] = await s.listBookings(SEED_BUSINESS_ID);
-    expect(booking).toMatchObject({ serviceId: "cut_and_beard", status: "pending_approval", customerName: "Dana", startsAt: "2026-11-05T15:00:00.000Z" });
+    expect(booking).toMatchObject({ serviceId: "cut_and_beard", status: "pending_approval", customerName: "Dana", startsAt: "2026-11-05T08:00:00.000Z" });
     expect(results[2].pendingApprovalId).toBe(booking.approvalId);
     expect(await s.getApproval(booking.approvalId!)).toMatchObject({ kind: "booking", status: "pending" });
 
@@ -279,9 +279,9 @@ describe("availability tool", () => {
     const before = await availability(ctx, SEED_BRAIN, DEMO_DATE, cut);
     expect(before.slots[0].time).toBe("09:00");
     expect(before.slots.at(-1)!.time).toBe("19:30");
-    await s.requestBooking({ businessId: SEED_BUSINESS_ID, conversationId: null, serviceId: "cut_and_beard", customerRef: "x", startsAt: "2026-11-05T15:00:00.000Z" });
+    await s.requestBooking({ businessId: SEED_BUSINESS_ID, conversationId: null, serviceId: "cut_and_beard", customerRef: "x", startsAt: "2026-11-05T08:00:00.000Z" });
     const after = await availability(ctx, SEED_BRAIN, DEMO_DATE, cut);
-    // 10:00-10:45 is taken: 10:00 and 10:30 starts overlap it.
+    // 10:00-10:45 Asia/Jerusalem (08:00Z) is taken: 10:00 and 10:30 starts overlap it.
     expect(after.slots.map((x) => x.time)).not.toContain("10:00");
     expect(after.slots.map((x) => x.time)).not.toContain("10:30");
     expect(after.slots.map((x) => x.time)).toContain("09:30");

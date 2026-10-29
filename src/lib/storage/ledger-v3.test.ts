@@ -116,7 +116,8 @@ describe("v2 -> v3 ledger migration", () => {
     await reopened.close();
     expect(columns(file)).toEqual(expect.arrayContaining(V3_COLUMNS));
     const db = new Database(file);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    // Migrated through to the current schema (v4 adds brain-source columns).
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(migrateV2ToV3(db)).toEqual([]);
     db.close();
   });
@@ -229,7 +230,7 @@ describe("engine native-mode request (MODEL_TOOL_MODE=native)", () => {
     expect(bodies[1].messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "t1" });
 
     const [booking] = await store.listBookings(SEED_BUSINESS_ID);
-    expect(booking).toMatchObject({ status: "pending_approval", serviceId: "cut_and_beard", customerName: "Dana", startsAt: "2026-11-05T15:00:00.000Z" });
+    expect(booking).toMatchObject({ status: "pending_approval", serviceId: "cut_and_beard", customerName: "Dana", startsAt: "2026-11-05T08:00:00.000Z" });
     expect(await store.getApproval(booking.approvalId!)).toMatchObject({ kind: "booking", status: "pending" });
     expect(b.pendingApprovalId).toBe(booking.approvalId);
     const rows = await store.listSpend();

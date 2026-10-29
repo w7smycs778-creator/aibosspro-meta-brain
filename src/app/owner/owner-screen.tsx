@@ -88,9 +88,14 @@ export function OwnerScreen() {
         <div className="rounded border bg-white p-3">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-semibold">{state?.business?.name ?? "No business yet"}</h1>
-            <button onClick={reset} className="rounded border px-2 py-1 hover:bg-gray-100">
-              Reset demo data
-            </button>
+            <span className="space-x-2">
+              <a href="/onboard" className="rounded border px-2 py-1 hover:bg-gray-100">
+                Onboarding / brain review
+              </a>
+              <button onClick={reset} className="rounded border px-2 py-1 hover:bg-gray-100">
+                Reset demo data
+              </button>
+            </span>
           </div>
           {state?.brain ? (
             <p className="mt-1 text-gray-600">

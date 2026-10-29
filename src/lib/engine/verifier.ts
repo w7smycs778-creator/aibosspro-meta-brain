@@ -46,6 +46,9 @@ export function latestAvailability(turns: Turn[]): AvailabilityResult | null {
   return null;
 }
 
+/** "$35", "₪120", "35 USD", "120 ₪", "120 NIS", "120 shekels". */
+const PRICE_RE = /([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?|ILS|NIS|shekels?|₪|€|£)(?![\p{L}\d])/giu;
+
 /** Max gap between a service name and the price bound to it. */
 const BIND_WINDOW = 60;
 /** Context searched around a booking claim for negation or condition words. */
@@ -66,8 +69,11 @@ function pricesByService(brain: BusinessBrain): Map<string, Set<number>> {
   const out = new Map<string, Set<number>>();
   for (const s of brain.services) out.set(s.id, new Set([s.priceCents]));
   for (const d of brain.discounts) {
-    const s = brain.services.find((x) => x.id === d.serviceId);
-    if (s) out.get(s.id)!.add(Math.round((s.priceCents * (100 - d.percentOff)) / 100));
+    const targets = d.serviceIds.length ? brain.services.filter((x) => d.serviceIds.includes(x.id)) : brain.services;
+    for (const s of targets) {
+      if (d.percentOff !== null) out.get(s.id)!.add(Math.round((s.priceCents * (100 - d.percentOff)) / 100));
+      if (d.amountOffCents !== null) out.get(s.id)!.add(Math.max(0, s.priceCents - d.amountOffCents));
+    }
   }
   return out;
 }
@@ -126,11 +132,13 @@ export function verifyText(text: string, facts: Facts): Verdict {
     if (m) checks.push({ rule: "protocol_leak", claim: m[0], pass: false, detail: `reply ${detail}; call the tool directly` });
   }
   const byService = pricesByService(brain);
-  const allPrices = new Set([...byService.values()].flatMap((s) => [...s]));
+  // A fixed discount amount ("$5 off") may also be quoted on its own.
+  const amountsOff = brain.discounts.flatMap((d) => (d.amountOffCents !== null ? [d.amountOffCents] : []));
+  const allPrices = new Set([...[...byService.values()].flatMap((s) => [...s]), ...amountsOff]);
   const money = (c: number) => `${(c / 100).toFixed(2).replace(/\.00$/, "")}`;
 
   const names = nameSpans(text, brain);
-  const priceMatches = [...text.matchAll(/([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?)\b/gi)];
+  const priceMatches = [...text.matchAll(PRICE_RE)];
   const priceSpans: Span[] = priceMatches.map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
 
   priceMatches.forEach((m, i) => {
@@ -150,7 +158,7 @@ export function verifyText(text: string, facts: Facts): Verdict {
     checks.push({ rule: "service_price", claim: `${name} ${claim}`, pass: ok, ...(!ok && { detail: `${name} is not priced ${money(cents)}` }) });
   });
 
-  const percents = new Set(brain.discounts.map((d) => d.percentOff));
+  const percents = new Set(brain.discounts.flatMap((d) => (d.percentOff !== null ? [d.percentOff] : [])));
   for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?%/g)) {
     const ok = percents.has(Number(m[1]));
     checks.push({ rule: "discount", claim: m[0], pass: ok, ...(!ok && { detail: `no ${m[0]} discount in the approved brain` }) });
