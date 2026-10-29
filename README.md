@@ -9,11 +9,12 @@ Every AI reply is labelled as AI. Nothing is booked or published without the own
 - Node 20 or newer (`node -v`; the repo pins 20 in `.nvmrc`).
 - For live model calls: a Meta Model API key with credit. Without one, the app still runs and shows exactly why inference is off.
 - macOS or Linux shell (the start script is bash).
+- Clone somewhere outside `/tmp`: the spend ledger in a temp directory counts as not durable, so live calls (and the tests that exercise the durable ledger) are refused there.
 
 ## Start locally (one command)
 
 ```bash
-git clone <this repo> meta-brain && cd meta-brain
+git clone https://github.com/w7smycs778-creator/aibosspro-meta-brain.git meta-brain && cd meta-brain
 npm run judge
 ```
 
