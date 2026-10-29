@@ -41,24 +41,42 @@ function check<T>(res: { data: T; error: { message: string; code?: string } | nu
   return res.data;
 }
 
+/**
+ * Realtime is never used. supabase-js builds its realtime client on construction
+ * and throws on Node 20, which has no native WebSocket; a transport that is
+ * never constructed avoids that (Vercel runs Node 24 and is unaffected).
+ */
+class NoRealtimeTransport {
+  constructor() {
+    throw new Error("Supabase realtime is not used by Meta Brain");
+  }
+}
+
 export class SupabaseStore implements Storage {
   readonly backend = "supabase" as const;
 
   private constructor(private readonly db: SupabaseClient) {}
 
-  static fromEnv(env: Env = process.env): SupabaseStore {
+  /** fetchImpl is for tests; production uses the global fetch. */
+  static fromEnv(env: Env = process.env, fetchImpl?: typeof fetch): SupabaseStore {
     if (typeof window !== "undefined") throw new StorageConfigError("SupabaseStore is server only");
     const url = env.SUPABASE_URL;
     const key = env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !url.startsWith("https://")) throw new StorageConfigError("SUPABASE_URL is missing or not https");
     if (!key) throw new StorageConfigError("SUPABASE_SERVICE_ROLE_KEY is not set");
     return new SupabaseStore(
-      createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }),
+      createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        realtime: { transport: NoRealtimeTransport as never },
+        ...(fetchImpl && { global: { fetch: fetchImpl } }),
+      }),
     );
   }
 
+  // A GET, not a HEAD: PostgREST answers HEAD on a missing table with 204 and
+  // no error, which made an unmigrated project look reachable (2026-10-29).
   async ping(): Promise<void> {
-    check(await this.db.from("model_spend_reservations").select("id", { head: true }).limit(1), "ping");
+    check(await this.db.from("model_spend_reservations").select("id").limit(1), "ping");
   }
 
   async isDurable(): Promise<boolean> {

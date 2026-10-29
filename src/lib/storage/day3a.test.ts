@@ -299,6 +299,26 @@ describe("storage factory and startup", () => {
     await expect(createStore({ STORAGE_BACKEND: "supabase" })).rejects.toThrow(/SUPABASE_URL/);
   });
 
+  it("Supabase ping fails on a project without the ledger table, even though HEAD answers 204", async () => {
+    const { SupabaseStore } = await import("./supabase-store");
+    // What PostgREST did on the fresh meta-brain project: HEAD 204 with no body, GET 404 PGRST205.
+    const fakeFetch = (async (_url: string, init?: RequestInit) =>
+      init?.method === "HEAD"
+        ? new Response(null, { status: 204 })
+        : new Response(JSON.stringify({ code: "PGRST205", message: "Could not find the table 'public.model_spend_reservations' in the schema cache" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          })) as typeof fetch;
+    const store = SupabaseStore.fromEnv({ SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "sb_secret_placeholder" }, fakeFetch);
+    await expect(store.ping()).rejects.toThrow(/PGRST205/);
+    expect(await store.isDurable()).toBe(false);
+  });
+
+  it("the Supabase store constructs on Node 20, which has no native WebSocket (no network)", async () => {
+    const store = await createStore({ STORAGE_BACKEND: "supabase", SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "sb_secret_placeholder" });
+    expect(store.backend).toBe("supabase");
+  });
+
   it("reset wipes business data, reseeds one approved brain, keeps ledger and dedupe", async () => {
     const store = openStore(tempDir());
     await store.reset();

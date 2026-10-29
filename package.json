@@ -13,7 +13,8 @@
     "test": "vitest run",
     "dev:local": "STORAGE_BACKEND=local next dev",
     "store:reset": "tsx --env-file=.env scripts/reset-store.ts",
-    "mock:run": "tsx scripts/mock-run.ts"
+    "mock:run": "tsx scripts/mock-run.ts",
+    "store:reset:supabase": "tsx --env-file=.env scripts/store-reset-supabase.ts"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",
