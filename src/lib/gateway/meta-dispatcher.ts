@@ -93,7 +93,11 @@ export class MetaDispatcher implements Dispatcher {
               { type: "input_image", image_url: dataUrl },
             ],
           }],
-        }, (body) => ({ output: responsesText(body), units: { kind: "segment", images: 1 } }));
+        // The mask encoding is undocumented, so the whole output structure is kept for the parser.
+        }, (body) => ({
+          output: body?.output !== undefined ? JSON.stringify(body.output) : responsesText(body),
+          units: { kind: "segment", images: 1 },
+        }));
       }
     }
   }

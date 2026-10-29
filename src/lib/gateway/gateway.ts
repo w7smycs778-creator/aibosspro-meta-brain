@@ -126,6 +126,7 @@ export class SpendGateway {
           output: result.output,
           toolCalls: result.toolCalls,
           protocolError: result.protocolError,
+          finishReason: result.finishReason,
           errorBody: result.errorBody?.slice(0, ERROR_BODY_LIMIT),
           attempts,
           reservedNano: sum(attempts, "reservedNano"),

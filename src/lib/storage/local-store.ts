@@ -20,6 +20,8 @@ import type {
   Business,
   BusinessBrain,
   Channel,
+  Creative,
+  NewCreative,
   Conversation,
   ConversationMode,
   ConversationState,
@@ -38,8 +40,8 @@ export const LOCAL_DB_FILE = "meta-brain.sqlite";
  * Bumped when SCHEMA changes shape. v2 and v3 files are migrated in place
  * (columns added, rows kept); anything older is refused.
  */
-const SCHEMA_VERSION = 5;
-const MIGRATABLE_VERSIONS = new Set([2, 3, 4]);
+const SCHEMA_VERSION = 6;
+const MIGRATABLE_VERSIONS = new Set([2, 3, 4, 5]);
 
 /** Ledger columns added in v3, applied to v2 files by ALTER TABLE. */
 const V3_LEDGER_COLUMNS: Array<[name: string, ddl: string]> = [
@@ -73,7 +75,24 @@ const SCHEMA = `
 create table if not exists businesses (
   id text primary key,
   name text not null,
-  created_at text not null
+  created_at text not null,
+  whatsapp_default_mode text not null default 'HUMAN' check (whatsapp_default_mode in ('AUTO', 'HUMAN', 'PAUSED'))
+);
+create table if not exists creatives (
+  id text primary key,
+  business_id text not null references businesses(id) on delete cascade,
+  offer_id text not null,
+  offer text not null,
+  brain_version integer not null,
+  status text not null check (status in ('pending_approval', 'approved', 'rejected')),
+  caption text not null,
+  caption_log text,
+  media text not null,
+  cutout_kind text not null,
+  scene_kind text not null,
+  diagnostics text not null,
+  created_at text not null,
+  decided_at text
 );
 create table if not exists brain_versions (
   business_id text not null references businesses(id) on delete cascade,
@@ -219,7 +238,9 @@ export class LocalStore implements Storage {
       .transaction(() => {
         this.db.prepare("delete from businesses").run();
         const at = now();
-        this.db.prepare("insert into businesses (id, name, created_at) values (?, ?, ?)").run(SEED_BUSINESS_ID, SEED_BRAIN.name, at);
+        this.db
+          .prepare("insert into businesses (id, name, created_at, whatsapp_default_mode) values (?, ?, ?, 'AUTO')")
+          .run(SEED_BUSINESS_ID, SEED_BRAIN.name, at);
         this.db
           .prepare(
             `insert into brain_versions (business_id, version, brain, approved, created_at, approved_at, source_kind)
@@ -233,7 +254,64 @@ export class LocalStore implements Storage {
 
   async getBusiness(id: string): Promise<Business | null> {
     const r = this.db.prepare("select * from businesses where id = ?").get(id) as Row | undefined;
-    return r ? { id: r.id, name: r.name, createdAt: r.created_at } : null;
+    return r ? toBusiness(r) : null;
+  }
+
+  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
+    const res = this.db.prepare("update businesses set whatsapp_default_mode = ? where id = ?").run(settings.whatsappDefaultMode, id);
+    if (res.changes === 0) throw new Error(`business ${id} not found`);
+    return (await this.getBusiness(id))!;
+  }
+
+  async createCreative(input: NewCreative): Promise<Creative> {
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `insert into creatives (id, business_id, offer_id, offer, brain_version, status, caption, caption_log, media,
+                                cutout_kind, scene_kind, diagnostics, created_at)
+         values (?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.businessId,
+        input.offerId,
+        JSON.stringify(input.offer),
+        input.brainVersion,
+        input.caption,
+        input.captionLog ? JSON.stringify(input.captionLog) : null,
+        JSON.stringify(input.media),
+        input.cutoutKind,
+        input.sceneKind,
+        JSON.stringify(input.diagnostics),
+        now(),
+      );
+    return (await this.getCreative(id))!;
+  }
+
+  async getCreative(id: string): Promise<Creative | null> {
+    const r = this.db.prepare("select * from creatives where id = ?").get(id) as Row | undefined;
+    return r ? toCreative(r) : null;
+  }
+
+  async listCreatives(businessId: string): Promise<Creative[]> {
+    return (this.db.prepare("select * from creatives where business_id = ? order by created_at desc").all(businessId) as Row[]).map(toCreative);
+  }
+
+  async updateCreativeCaption(id: string, caption: string, captionLog: Record<string, unknown> | null): Promise<Creative> {
+    const res = this.db
+      .prepare("update creatives set caption = ?, caption_log = ? where id = ? and status = 'pending_approval'")
+      .run(caption, captionLog ? JSON.stringify(captionLog) : null, id);
+    if (res.changes === 0) throw new Error(`creative ${id} is not pending approval`);
+    return (await this.getCreative(id))!;
+  }
+
+  async decideCreative(id: string, decision: "approved" | "rejected"): Promise<{ creative: Creative; changed: boolean }> {
+    const res = this.db
+      .prepare("update creatives set status = ?, decided_at = ? where id = ? and status = 'pending_approval'")
+      .run(decision, now(), id);
+    const creative = await this.getCreative(id);
+    if (!creative) throw new Error(`creative ${id} not found`);
+    return { creative, changed: res.changes === 1 };
   }
 
   async addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion> {
@@ -545,6 +623,7 @@ function prepare(db: Database.Database, file: string): Database.Database {
     migrateV2ToV3(db);
     migrateV3ToV4(db);
     migrateV4ToV5(db);
+    migrateV5ToV6(db);
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }).immediate();
   return db;
@@ -558,6 +637,19 @@ function addMissingColumns(db: Database.Database, table: string, columns: Array<
     db.exec(`alter table ${table} add column ${ddl}`);
     added.push(name);
   }
+  return added;
+}
+
+/**
+ * Adds the v6 business setting (the creatives table comes from SCHEMA). When
+ * the column is new, the seeded demo business starts WhatsApp chats in AUTO.
+ * Safe to run repeatedly.
+ */
+export function migrateV5ToV6(db: Database.Database): string[] {
+  const added = addMissingColumns(db, "businesses", [
+    ["whatsapp_default_mode", "whatsapp_default_mode text not null default 'HUMAN' check (whatsapp_default_mode in ('AUTO', 'HUMAN', 'PAUSED'))"],
+  ]);
+  if (added.length) db.prepare("update businesses set whatsapp_default_mode = 'AUTO' where id = ?").run(SEED_BUSINESS_ID);
   return added;
 }
 
@@ -576,6 +668,29 @@ export function migrateV3ToV4(db: Database.Database): string[] {
 /** Adds the v3 ledger columns that are missing; rows are untouched. Safe to run repeatedly. */
 export function migrateV2ToV3(db: Database.Database): string[] {
   return addMissingColumns(db, "model_spend_reservations", V3_LEDGER_COLUMNS);
+}
+
+function toBusiness(r: Row): Business {
+  return { id: r.id, name: r.name, createdAt: r.created_at, whatsappDefaultMode: r.whatsapp_default_mode ?? "HUMAN" };
+}
+
+function toCreative(r: Row): Creative {
+  return {
+    id: r.id,
+    businessId: r.business_id,
+    offerId: r.offer_id,
+    offer: JSON.parse(r.offer),
+    brainVersion: r.brain_version,
+    status: r.status,
+    caption: r.caption,
+    captionLog: r.caption_log ? JSON.parse(r.caption_log) : null,
+    media: JSON.parse(r.media),
+    cutoutKind: r.cutout_kind,
+    sceneKind: r.scene_kind,
+    diagnostics: JSON.parse(r.diagnostics),
+    createdAt: r.created_at,
+    decidedAt: r.decided_at ?? null,
+  };
 }
 
 function toBrain(r: Row): BrainVersion {

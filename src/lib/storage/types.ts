@@ -41,7 +41,39 @@ export type BusinessBrain = {
   doNotSay: string[];
 };
 
-export type Business = { id: string; name: string; createdAt: string };
+export type Business = {
+  id: string;
+  name: string;
+  createdAt: string;
+  /** Mode new WhatsApp conversations start in. */
+  whatsappDefaultMode: ConversationMode;
+};
+
+export type CreativeStatus = "pending_approval" | "approved" | "rejected";
+
+/** A branded post built from one approved offer: images, caption, and how each part was made. */
+export type Creative = {
+  id: string;
+  businessId: string;
+  offerId: string;
+  /** Offer facts as computed from the brain when the creative was made. */
+  offer: Record<string, unknown>;
+  brainVersion: number;
+  status: CreativeStatus;
+  caption: string;
+  /** Verifier log for the caption (attempts, checks, final verdict). */
+  captionLog: Record<string, unknown> | null;
+  /** Absolute local paths under ./data/media/. */
+  media: { original: string; cutout: string | null; scene: string | null; feed: string; story: string };
+  cutoutKind: "mask" | "box" | "unavailable";
+  sceneKind: "generated" | "flat";
+  /** Model output shapes and fallback reasons, for review. */
+  diagnostics: Record<string, unknown>;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export type NewCreative = Omit<Creative, "id" | "status" | "createdAt" | "decidedAt">;
 
 export type BrainSource = {
   kind: "voice" | "text" | "seed";
@@ -208,6 +240,7 @@ export interface Storage extends SpendLedgerStore {
   reset(): Promise<{ businessId: string }>;
 
   getBusiness(id: string): Promise<Business | null>;
+  updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business>;
   /** Stores the next version, unapproved. */
   addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion>;
   /** Replaces the brain of an unapproved version; approved versions are immutable. */
@@ -244,6 +277,14 @@ export interface Storage extends SpendLedgerStore {
   decideApproval(id: string, decision: "approved" | "rejected"): Promise<{ approval: PendingApproval; changed: boolean }>;
   listPendingApprovals(businessId: string): Promise<PendingApproval[]>;
   listBookings(businessId: string): Promise<Booking[]>;
+
+  /** Stores a creative as PENDING_APPROVAL. */
+  createCreative(input: NewCreative): Promise<Creative>;
+  getCreative(id: string): Promise<Creative | null>;
+  listCreatives(businessId: string): Promise<Creative[]>;
+  updateCreativeCaption(id: string, caption: string, captionLog: Record<string, unknown> | null): Promise<Creative>;
+  /** Approves or rejects a pending creative; an already decided one is left as is (changed: false). */
+  decideCreative(id: string, decision: "approved" | "rejected"): Promise<{ creative: Creative; changed: boolean }>;
 
   listSpend(): Promise<SpendEntry[]>;
   spendTotals(runId?: string): Promise<LedgerSnapshot>;

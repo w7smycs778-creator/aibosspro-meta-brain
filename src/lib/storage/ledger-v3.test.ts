@@ -116,8 +116,8 @@ describe("v2 -> v3 ledger migration", () => {
     await reopened.close();
     expect(columns(file)).toEqual(expect.arrayContaining(V3_COLUMNS));
     const db = new Database(file);
-    // Migrated through to the current schema (v4 brain-source columns, v5 booking price and keys).
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    // Migrated through to the current schema (v4 brain sources, v5 booking price and keys, v6 business setting and creatives).
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     expect(migrateV2ToV3(db)).toEqual([]);
     db.close();
   });

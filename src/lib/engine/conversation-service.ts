@@ -40,8 +40,12 @@ export type InboundResult = {
 const HISTORY_TURNS = 20;
 const REPLY_KINDS = new Set(["final", "owner_help_reply", "owner_decision"]);
 
-/** Panel conversations on the seeded demo business start in AUTO; everything else uses the store default. */
-function initialMode(input: InboundInput): ConversationMode | undefined {
+/**
+ * Panel conversations on the seeded demo business start in AUTO; WhatsApp
+ * conversations use the business's whatsappDefaultMode; anything else uses the store default.
+ */
+async function initialMode(store: Storage, input: InboundInput): Promise<ConversationMode | undefined> {
+  if (input.channel === "whatsapp") return (await store.getBusiness(input.businessId))?.whatsappDefaultMode;
   return input.channel === "panel" && input.businessId === SEED_BUSINESS_ID ? "AUTO" : undefined;
 }
 
@@ -72,7 +76,7 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       channel: input.channel,
       externalId: input.externalConversationId,
       customerRef: input.senderId,
-      mode: initialMode(input),
+      mode: await initialMode(store, input),
     }));
   // Finish anything a crash left half done before taking the new message.
   await resumeConversation({ store, deliver, now: d.now }, conversation.id);

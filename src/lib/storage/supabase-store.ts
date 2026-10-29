@@ -1,6 +1,6 @@
 // Postgres store through Supabase with the service-role key. Server only: the
 // key bypasses RLS, so this module must never be imported by client code.
-// Tables and ledger functions: supabase/migrations/ (20261027120000 through 20261029210000).
+// Tables and ledger functions: supabase/migrations/ (20261027120000 through 20261029220000).
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../gateway/types";
@@ -17,6 +17,8 @@ import type {
   Business,
   BusinessBrain,
   Channel,
+  Creative,
+  NewCreative,
   Conversation,
   ConversationMode,
   ConversationState,
@@ -73,7 +75,10 @@ export class SupabaseStore implements Storage {
     // Cascades to brains, conversations, turns, approvals and bookings.
     check(await this.db.from("businesses").delete().neq("id", ""), "reset delete");
     const at = new Date().toISOString();
-    check(await this.db.from("businesses").insert({ id: SEED_BUSINESS_ID, name: SEED_BRAIN.name, created_at: at }), "reset business");
+    check(
+      await this.db.from("businesses").insert({ id: SEED_BUSINESS_ID, name: SEED_BRAIN.name, created_at: at, whatsapp_default_mode: "AUTO" }),
+      "reset business",
+    );
     check(
       await this.db
         .from("brain_versions")
@@ -85,7 +90,74 @@ export class SupabaseStore implements Storage {
 
   async getBusiness(id: string): Promise<Business | null> {
     const r = check(await this.db.from("businesses").select("*").eq("id", id).maybeSingle(), "getBusiness") as Row | null;
-    return r ? { id: r.id, name: r.name, createdAt: r.created_at } : null;
+    return r ? { id: r.id, name: r.name, createdAt: r.created_at, whatsappDefaultMode: r.whatsapp_default_mode ?? "HUMAN" } : null;
+  }
+
+  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
+    check(await this.db.from("businesses").update({ whatsapp_default_mode: settings.whatsappDefaultMode }).eq("id", id), "updateBusinessSettings");
+    const b = await this.getBusiness(id);
+    if (!b) throw new Error(`business ${id} not found`);
+    return b;
+  }
+
+  async createCreative(input: NewCreative): Promise<Creative> {
+    const r = check(
+      await this.db
+        .from("creatives")
+        .insert({
+          id: randomUUID(),
+          business_id: input.businessId,
+          offer_id: input.offerId,
+          offer: input.offer,
+          brain_version: input.brainVersion,
+          status: "pending_approval",
+          caption: input.caption,
+          caption_log: input.captionLog,
+          media: input.media,
+          cutout_kind: input.cutoutKind,
+          scene_kind: input.sceneKind,
+          diagnostics: input.diagnostics,
+        })
+        .select()
+        .single(),
+      "createCreative",
+    );
+    return toCreative(r);
+  }
+
+  async getCreative(id: string): Promise<Creative | null> {
+    const r = check(await this.db.from("creatives").select("*").eq("id", id).maybeSingle(), "getCreative");
+    return r ? toCreative(r) : null;
+  }
+
+  async listCreatives(businessId: string): Promise<Creative[]> {
+    const rows = check(await this.db.from("creatives").select("*").eq("business_id", businessId).order("created_at", { ascending: false }), "listCreatives");
+    return (rows as Row[]).map(toCreative);
+  }
+
+  async updateCreativeCaption(id: string, caption: string, captionLog: Record<string, unknown> | null): Promise<Creative> {
+    const rows = check(
+      await this.db.from("creatives").update({ caption, caption_log: captionLog }).eq("id", id).eq("status", "pending_approval").select(),
+      "updateCreativeCaption",
+    ) as Row[];
+    if (rows.length === 0) throw new Error(`creative ${id} is not pending approval`);
+    return toCreative(rows[0]);
+  }
+
+  async decideCreative(id: string, decision: "approved" | "rejected"): Promise<{ creative: Creative; changed: boolean }> {
+    const rows = check(
+      await this.db
+        .from("creatives")
+        .update({ status: decision, decided_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("status", "pending_approval")
+        .select(),
+      "decideCreative",
+    ) as Row[];
+    if (rows.length) return { creative: toCreative(rows[0]), changed: true };
+    const current = await this.getCreative(id);
+    if (!current) throw new Error(`creative ${id} not found`);
+    return { creative: current, changed: false };
   }
 
   async addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion> {
@@ -441,6 +513,25 @@ export class SupabaseStore implements Storage {
     ) as Row[];
     return rows.length === 1;
   }
+}
+
+function toCreative(r: Row): Creative {
+  return {
+    id: r.id,
+    businessId: r.business_id,
+    offerId: r.offer_id,
+    offer: r.offer,
+    brainVersion: r.brain_version,
+    status: r.status,
+    caption: r.caption,
+    captionLog: r.caption_log ?? null,
+    media: r.media,
+    cutoutKind: r.cutout_kind,
+    sceneKind: r.scene_kind,
+    diagnostics: r.diagnostics,
+    createdAt: r.created_at,
+    decidedAt: r.decided_at ?? null,
+  };
 }
 
 function toBrain(r: Row): BrainVersion {

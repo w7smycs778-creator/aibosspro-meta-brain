@@ -229,9 +229,10 @@ describe("conversation service", () => {
     expect((await s.listTurns(first.conversationId!)).filter((t) => t.role === "customer")).toHaveLength(1);
   });
 
-  it("panel conversations start in AUTO, WhatsApp in HUMAN; the owner switch persists", async () => {
+  it("panel conversations start in AUTO, WhatsApp in the business default (HUMAN here); the owner switch persists", async () => {
     const s = store();
     await s.reset();
+    await s.updateBusinessSettings(SEED_BUSINESS_ID, { whatsappDefaultMode: "HUMAN" });
     const { deps: d } = deps(s, [final("Hi."), final("Hi.")]);
     const panel = await handleInbound(inbound("hi", "p1"), d);
     const wa = await handleInbound(inbound("hi", "w1", "whatsapp", "15550000002"), d);

@@ -16,7 +16,9 @@ export type Rule =
   | "time"
   | "booking_claim"
   | "booking_slot"
-  | "protocol_leak";
+  | "protocol_leak"
+  | "offer"
+  | "length";
 
 /**
  * A customer reply must not promise a lookup instead of doing it, or talk

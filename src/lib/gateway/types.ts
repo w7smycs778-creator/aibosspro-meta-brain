@@ -138,6 +138,7 @@ export type GatewayResult =
       output?: string;
       toolCalls?: ToolCallRequest[];
       protocolError?: string;
+      finishReason?: string;
       errorBody?: string;
       attempts: AttemptRecord[];
       reservedNano: NanoUsd;

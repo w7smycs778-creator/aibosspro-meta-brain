@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ContentSection } from "./content-section";
 
 type Mode = "AUTO" | "HUMAN" | "PAUSED";
 type Turn = { id: string; seq: number; role: string; content: string; checkpoint: Record<string, any> | null };
@@ -185,6 +186,8 @@ export function OwnerScreen() {
             ))}
           </ul>
         </div>
+
+        <ContentSection />
 
         <div className="rounded border bg-white p-3">
           <h2 className="mb-2 font-semibold">Bookings</h2>
