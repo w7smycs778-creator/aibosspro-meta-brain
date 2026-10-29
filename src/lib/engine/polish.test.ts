@@ -277,3 +277,28 @@ describe("live inference status (judge path)", () => {
     expect(await liveInferenceStatus(env, durable)).toEqual({ live: true, reason: null });
   });
 });
+
+describe("demo reset", () => {
+  it("reset(CEDAR_BRAIN) clears conversations, bookings and old brains, keeps the ledger", async () => {
+    const s = await cedarStore();
+    await s.reset(); // Harbor Lane, as an older ./data would have
+    const { deps: d } = deps(s, [
+      call("check_availability", { date: TUESDAY, service: "cut_and_beard" }),
+      call("request_booking", { service: "cut_and_beard", slot: `${TUESDAY}T10:00`, customer_name: "Dana", customer_contact: "050-0000000" }),
+      final("Sent to the owner for approval."),
+    ]);
+    await handleInbound(inbound("Book Tuesday 10:00, Dana 050-0000000", "r1"), d);
+    expect(await s.listBookings(SEED_BUSINESS_ID)).toHaveLength(1);
+    const spend = (await s.listSpend()).length;
+    expect(spend).toBe(3);
+
+    await s.reset(CEDAR_BRAIN);
+    expect(await s.listConversations(SEED_BUSINESS_ID)).toEqual([]);
+    expect(await s.listBookings(SEED_BUSINESS_ID)).toEqual([]);
+    expect(await s.listPendingApprovals(SEED_BUSINESS_ID)).toEqual([]);
+    const versions = await s.listBrainVersions(SEED_BUSINESS_ID);
+    expect(versions.map((v) => [v.version, v.approved, v.brain.name])).toEqual([[1, true, "Cedar Street Barbers"]]);
+    expect((await s.getBusiness(SEED_BUSINESS_ID))?.name).toBe("Cedar Street Barbers");
+    expect(await s.listSpend()).toHaveLength(spend);
+  });
+});
