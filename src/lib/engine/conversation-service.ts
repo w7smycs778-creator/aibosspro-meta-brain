@@ -202,6 +202,7 @@ export function buildMessages(brain: BusinessBrain, version: number, history: Tu
     brainFacts(brain, version),
     "Never invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.",
     "Offer only start times returned by check_availability. Request a booking only for a slot it returned.",
+    "When you offer a time, state the price for that day from check_availability's price.quote. If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"Tuesday 10:00 is open, Cut plus beard is ₪102 on Tuesday, normally ₪120.\" Never calculate a price yourself.",
     "A booking is never confirmed by you: request_booking creates a pending request that the owner approves.",
     "If the customer needs anything the tools cannot do, call request_owner_help.",
     "Call the tool directly; never say you will check something.",

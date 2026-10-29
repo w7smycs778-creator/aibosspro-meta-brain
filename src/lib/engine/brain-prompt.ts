@@ -1,5 +1,6 @@
 // Renders the approved brain into the system prompt, so the model answers
 // questions about services, prices, hours and discounts without a tool call.
+import { discountedCents, rulesFor } from "./discounts";
 import type { BusinessBrain, Weekday } from "../storage/types";
 
 const SYMBOLS: Record<string, string> = { USD: "$", ILS: "₪", EUR: "€", GBP: "£" };
@@ -26,7 +27,12 @@ export function brainFacts(brain: BusinessBrain, version: number): string {
           const off = d.percentOff !== null ? `${d.percentOff}% off` : `${formatMoney(d.amountOffCents ?? 0, brain.currency)} off`;
           const services = d.serviceIds.length ? d.serviceIds.map(name).join(", ") : "all services";
           const days = d.weekdays.length ? ` on ${d.weekdays.map((w) => DAY_NAMES[w]).join(", ")}` : "";
-          return `- ${d.description} (${off} ${services}${days}${d.conditions ? `; ${d.conditions}` : ""})`;
+          // The discounted price per covered service, computed here so the model never does the arithmetic.
+          const covered = brain.services.filter((s) => rulesFor(brain, s.id).includes(d));
+          const prices = covered
+            .map((s) => `${s.name} ${formatMoney(discountedCents(s, d), s.currency || brain.currency)} instead of ${formatMoney(s.priceCents, s.currency || brain.currency)}`)
+            .join(", ");
+          return `- ${d.description} (${off} ${services}${days}${d.conditions ? `; ${d.conditions}` : ""}; price then: ${prices})`;
         })
       : ["- none; offer no discount"]),
     "Booking policy: every booking needs the owner's approval.",

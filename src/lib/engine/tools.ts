@@ -3,20 +3,36 @@
 // booking and the owner approval that gates it.
 import type { ToolContext, ToolSpec } from "../gateway/tools";
 import { SlotTakenError } from "../storage/errors";
+import { formatMoney } from "./brain-prompt";
 import { priceOn } from "./discounts";
-import type { BusinessBrain, Service } from "../storage/types";
+import type { BusinessBrain, Service, Weekday } from "../storage/types";
 import { formatLocal, hhmm, localDate, localToUtc, minutes, weekdayOf } from "./time";
 
 export const SLOT_STEP_MIN = 30;
 
 export type Slot = { slot: string; time: string; startsAt: string };
 
+const DAY_FULL: Record<Weekday, string> = {
+  sun: "Sunday", mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday",
+};
+
+/** What the customer is told about the price on this date, computed here so the model never does price arithmetic. */
+export type PriceQuote = {
+  priceCents: number;
+  currency: string;
+  discountId: string | null;
+  /** The service's list price; differs from priceCents only when a discount applies. */
+  listPriceCents: number;
+  /** e.g. "Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)". */
+  quote: string;
+};
+
 export type AvailabilityResult = {
   date: string;
   weekday: string;
   service: { id: string; name: string; durationMin: number; priceCents: number };
   /** The price on this date: the list price, or the discounted price when a rule's conditions hold. */
-  price: { priceCents: number; currency: string; discountId: string | null };
+  price: PriceQuote;
   slots: Slot[];
 };
 
@@ -32,6 +48,16 @@ export function resolveService(brain: BusinessBrain, ref: string): Service {
   const s = brain.services.find((x) => x.id === ref || x.name.toLowerCase() === key);
   if (!s) throw new Error(`unknown service "${ref}"; use an id from list_services`);
   return s;
+}
+
+export function priceQuote(brain: BusinessBrain, service: Service, weekday: Weekday): PriceQuote {
+  const { priceCents, discountId } = priceOn(brain, service, weekday);
+  const currency = service.currency || brain.currency;
+  const rule = discountId ? brain.discounts.find((d) => d.id === discountId) : undefined;
+  const quote = rule
+    ? `${service.name} is ${formatMoney(priceCents, currency)} on ${DAY_FULL[weekday]}, normally ${formatMoney(service.priceCents, currency)} (${rule.description})`
+    : `${service.name} is ${formatMoney(priceCents, currency)}`;
+  return { priceCents, currency, discountId, listPriceCents: service.priceCents, quote };
 }
 
 /** Open slots for service on date: weekly hours minus pending and confirmed bookings, future only. */
@@ -62,7 +88,7 @@ export async function availability(ctx: ToolContext, brain: BusinessBrain, date:
     date,
     weekday,
     service: { id: service.id, name: service.name, durationMin: service.durationMin, priceCents: service.priceCents },
-    price: { ...priceOn(brain, service, weekday), currency: service.currency || brain.currency },
+    price: priceQuote(brain, service, weekday),
     slots,
   };
 }
@@ -91,7 +117,8 @@ export const getHoursTool: ToolSpec = {
 
 export const checkAvailabilityTool: ToolSpec = {
   name: "check_availability",
-  description: "Open start times for one service on one date. Offer customers only times returned here.",
+  description:
+    "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quote, which includes any discount for that day.",
   parameters: {
     type: "object",
     properties: {
