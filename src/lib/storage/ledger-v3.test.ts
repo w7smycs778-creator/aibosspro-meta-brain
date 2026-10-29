@@ -167,10 +167,17 @@ describe("engine json-mode request", () => {
     expect(body.tools).toBeUndefined();
     expect(body.response_format.type).toBe("json_schema");
     expect(body.response_format.json_schema.name).toBe("agent_step");
-    const [toolBranch, finalBranch] = body.response_format.json_schema.schema.anyOf;
-    expect(toolBranch.required).toEqual(["type", "name", "args"]);
-    expect(toolBranch.properties.name.enum).toEqual(ENGINE_TOOLS.map((t) => t.name));
-    expect(finalBranch.required).toEqual(["type", "text"]);
+    const branches = body.response_format.json_schema.schema.anyOf;
+    expect(branches).toHaveLength(ENGINE_TOOLS.length + 1);
+    expect(branches.slice(0, -1).map((b: any) => b.properties.name.enum)).toEqual(ENGINE_TOOLS.map((t) => [t.name]));
+    // Every tool's arguments are expressible: args carries that tool's own properties and required keys.
+    const avail = branches.find((b: any) => b.properties.name.enum[0] === "check_availability");
+    expect(avail.required).toEqual(["type", "name", "args"]);
+    expect(Object.keys(avail.properties.args.properties)).toEqual(["date", "service"]);
+    expect(avail.properties.args.required).toEqual(["date", "service"]);
+    const booking = branches.find((b: any) => b.properties.name.enum[0] === "request_booking");
+    expect(booking.properties.args.required).toEqual(["service", "slot", "customer_name", "customer_contact"]);
+    expect(branches.at(-1).required).toEqual(["type", "text"]);
     expect((await store.listSpend())[0]).toMatchObject({ finishReason: "stop", reasoningTokens: 120 });
   });
 });

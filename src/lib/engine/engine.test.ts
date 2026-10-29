@@ -142,6 +142,37 @@ describe("verifier", () => {
     ]);
   });
 
+  it("leak guard blocks \"I'll check Thursday\", corrects, and the turn reaches a tool call", async () => {
+    const s = store();
+    await s.reset();
+    const { deps: d } = deps(s, [
+      final("I'll check Thursday for you."),
+      call("check_availability", { date: DEMO_DATE, service: "cut_and_beard" }),
+      final("Thursday Nov 5 at 10:00 is open for Cut + beard."),
+    ]);
+    const r = await handleInbound(inbound("Thursday 10:00 for a Cut + beard?", "leak-1"), d);
+    expect(r.outcome).toBe("final");
+    expect(r.replyText).toBe("[AI assistant] Thursday Nov 5 at 10:00 is open for Cut + beard.");
+    const first = r.trace.find((t) => t.checkpoint?.kind === "verifier")!.checkpoint!;
+    expect(first).toMatchObject({ pass: false, candidate: { text: "I'll check Thursday for you." } });
+    expect(first.checks).toContainEqual(expect.objectContaining({ rule: "protocol_leak", claim: "I'll check", pass: false }));
+  });
+
+  it("leak guard blocks protocol talk and JSON fragments; a second leak goes to the owner", async () => {
+    // The live leak text: protocol talk plus a JSON fragment (one check per matching pattern).
+    expect(
+      verifyText('Need to output tool call but format requires final? {"type":"tool_call"}', facts())
+        .checks.filter((c) => c.rule === "protocol_leak")
+        .map((c) => c.detail),
+    ).toEqual(["reply talks about the tool protocol; call the tool directly", "reply contains a JSON fragment; call the tool directly"]);
+    expect(verifyText("See you Thursday. Let me know if anything changes.", facts()).pass).toBe(true);
+    const s = store();
+    await s.reset();
+    const { deps: d } = deps(s, [final("Let me check that."), final("I will look into it.")]);
+    const r = await handleInbound(inbound("?", "leak-2"), d);
+    expect(r).toMatchObject({ outcome: "owner_help", state: "owner_help" });
+  });
+
   it("stores tool arguments as the candidate for a tool-call check", async () => {
     const s = store();
     await s.reset();
@@ -305,6 +336,8 @@ describe("tool protocol", () => {
     const r = await new MetaDispatcher({ ...env, MODEL_TOOL_MODE: "native" }, fetchSpy as unknown as typeof fetch).dispatch(chatCall);
     const sent = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
     expect(sent.tools).toEqual([{ type: "function", function: { name: "get_hours", description: "Hours.", parameters: { type: "object", properties: {} } } }]);
+    expect(sent.tool_choice).toBe("auto");
+    expect(sent.response_format).toBeUndefined();
     expect(r.toolCalls).toEqual([{ id: "t1", name: "get_hours", arguments: {} }]);
   });
 });

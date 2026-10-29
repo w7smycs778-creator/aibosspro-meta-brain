@@ -149,6 +149,7 @@ function buildMessages(brain: BusinessBrain, history: Turn[], text: string, now:
     "Offer only start times returned by check_availability. Request a booking only for a slot it returned.",
     "A booking is never confirmed by you: request_booking creates a pending request that the owner approves.",
     "If the customer needs anything the tools cannot do, call request_owner_help.",
+    "Call the tool directly; never say you will check something.",
     "Keep replies short and plain.",
     ...(availability ? [`Latest availability result: ${JSON.stringify(availability)}`] : []),
   ].join("\n");

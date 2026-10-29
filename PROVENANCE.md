@@ -98,6 +98,7 @@ Branch `day3a-storage`. No model was called: the tests and the scripted demo use
 - Day 3 binding gate NOT MET: the live request did not reach a pending booking (model output stopped before the JSON tool call at the token limit).
 
 - 2026-10-29 Day 3B1 progress: finish_reason persisted, verifier price-binding fixed, candidate text stored. Gate pending: tool mode selection.
+- 2026-10-29 Day 3B1 progress: per-tool args schema, leak guard, native tool_choice; mode selection pending probe. Native probe 1 (256 tokens, no date context): HTTP 200 with tools and tool_choice accepted, finish_reason length, content null, 249 reasoning tokens, $0.001832; inconclusive.
 
 ## Third-party
 

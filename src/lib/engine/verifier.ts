@@ -6,7 +6,18 @@ import type { ToolCallRequest } from "../gateway/types";
 import type { Booking, BusinessBrain, Turn } from "../storage/types";
 import type { AvailabilityResult } from "./tools";
 
-export type Rule = "price" | "service_price" | "discount" | "duration" | "time" | "booking_claim" | "booking_slot";
+export type Rule = "price" | "service_price" | "discount" | "duration" | "time" | "booking_claim" | "booking_slot" | "protocol_leak";
+
+/**
+ * A customer reply must not promise a lookup instead of doing it, or talk
+ * about the tool protocol. Seen live 2026-10-29: "I'll check our Thursday
+ * availability for you." and a reply quoting the step schema.
+ */
+const LEAK_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(?:I'?ll|I will|let me|I'?m going to|I am going to)\s+(?:check|look up|look into|find out|verify|get back)\b/i, "promises a lookup instead of calling the tool"],
+  [/\btool[ _]?calls?\b|\bschema\b|\bjson\b|\bformat requires\b|\bdeveloper\b/i, "talks about the tool protocol"],
+  [/"type"\s*:|\{\s*"/, "contains a JSON fragment"],
+];
 
 /**
  * One check. An inconclusive check (a known price with no unambiguous service)
@@ -109,6 +120,11 @@ function normaliseTime(h: string, m: string | undefined, ampm: string | undefine
 export function verifyText(text: string, facts: Facts): Verdict {
   const { brain } = facts;
   const checks: Check[] = [];
+
+  for (const [re, detail] of LEAK_PATTERNS) {
+    const m = text.match(re);
+    if (m) checks.push({ rule: "protocol_leak", claim: m[0], pass: false, detail: `reply ${detail}; call the tool directly` });
+  }
   const byService = pricesByService(brain);
   const allPrices = new Set([...byService.values()].flatMap((s) => [...s]));
   const money = (c: number) => `${(c / 100).toFixed(2).replace(/\.00$/, "")}`;

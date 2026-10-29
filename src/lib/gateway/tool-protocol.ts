@@ -37,10 +37,12 @@ export function jsonModeInstructions(tools: ToolDefinition[]): string {
 }
 
 /**
- * response_format for json mode: exactly one step object, either
- * {type:"tool_call", name, args} with name from the permitted tools, or
- * {type:"final", text}. decodeJsonMode still validates the reply in case the
- * endpoint ignores response_format.
+ * response_format for json mode: exactly one step object. One branch per
+ * permitted tool, {type:"tool_call", name: <that tool>, args: <that tool's
+ * parameter schema>}, plus {type:"final", text}. A bare {type:"object"} for
+ * args let the endpoint emit only {} on 2026-10-29, so tools that need
+ * arguments were never called. decodeJsonMode still validates the reply in
+ * case the endpoint ignores response_format.
  */
 export function jsonModeResponseFormat(tools: ToolDefinition[]) {
   return {
@@ -51,16 +53,21 @@ export function jsonModeResponseFormat(tools: ToolDefinition[]) {
       schema: {
         type: "object",
         anyOf: [
-          {
+          ...tools.map((t) => ({
             type: "object",
             properties: {
               type: { type: "string", enum: ["tool_call"] },
-              name: { type: "string", enum: tools.map((t) => t.name) },
-              args: { type: "object" },
+              name: { type: "string", enum: [t.name] },
+              args: {
+                type: "object",
+                properties: t.parameters.properties,
+                required: t.parameters.required ?? [],
+                additionalProperties: false,
+              },
             },
             required: ["type", "name", "args"],
             additionalProperties: false,
-          },
+          })),
           {
             type: "object",
             properties: {
@@ -148,6 +155,7 @@ export function encodeNative(messages: ChatMessage[], tools: ToolDefinition[]) {
       return { role: m.role, content: m.content };
     }),
     tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })),
+    tool_choice: "auto",
   };
 }
 
