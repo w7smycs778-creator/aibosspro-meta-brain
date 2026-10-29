@@ -4,6 +4,7 @@ import type { Env } from "../gateway/types";
 import { getStore } from "../storage";
 import type { Storage } from "../storage/types";
 import { DEMO_SCRIPT } from "./demo-script";
+import type { Deliver } from "./delivery";
 
 export const AI_DISCLOSURE = "[AI assistant] ";
 export const OWNER_HELP_REPLY = "Thanks, I've passed this to the team and someone will get back to you shortly.";
@@ -18,6 +19,8 @@ export type EngineDeps = {
   gatewayError?: string;
   model: string;
   now: () => Date;
+  /** Outbound sender per channel; defaults to channelDeliver (panel: no push, WhatsApp: Cloud API). */
+  deliver?: Deliver;
 };
 
 let mockGateway: SpendGateway | undefined;

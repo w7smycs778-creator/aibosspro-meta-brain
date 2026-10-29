@@ -3,10 +3,20 @@
 // reply against the approved brain's structured fields, the latest
 // availability result, and the conversation's bookings.
 import type { ToolCallRequest } from "../gateway/types";
-import type { Booking, BusinessBrain, Turn } from "../storage/types";
+import type { Booking, BusinessBrain, Turn, Weekday } from "../storage/types";
+import { discountedCents, ruleHoldsOn, rulesFor } from "./discounts";
 import type { AvailabilityResult } from "./tools";
 
-export type Rule = "price" | "service_price" | "discount" | "duration" | "time" | "booking_claim" | "booking_slot" | "protocol_leak";
+export type Rule =
+  | "price"
+  | "service_price"
+  | "discount"
+  | "discount_condition"
+  | "duration"
+  | "time"
+  | "booking_claim"
+  | "booking_slot"
+  | "protocol_leak";
 
 /**
  * A customer reply must not promise a lookup instead of doing it, or talk
@@ -76,6 +86,53 @@ function pricesByService(brain: BusinessBrain): Map<string, Set<number>> {
     }
   }
   return out;
+}
+
+const DAY_NAMES: Record<string, Weekday> = {
+  monday: "mon", tuesday: "tue", wednesday: "wed", thursday: "thu", friday: "fri", saturday: "sat", sunday: "sun",
+  Mon: "mon", Tue: "tue", Tues: "tue", Wed: "wed", Thu: "thu", Thur: "thu", Thurs: "thu", Fri: "fri", Sat: "sat", Sun: "sun",
+};
+/** Full day names in any case (and plural); short names only capitalised, so "sat down" is not Saturday. */
+const DAY_RE = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b|\b(Mon|Tues?|Wed|Thu(?:rs?)?|Fri|Sat|Sun)\b/gi;
+
+function dayMentions(text: string): Array<{ day: Weekday; index: number }> {
+  const out: Array<{ day: Weekday; index: number }> = [];
+  for (const m of text.matchAll(DAY_RE)) {
+    if (m[1]) out.push({ day: DAY_NAMES[m[1].toLowerCase()], index: m.index! });
+    else if (/^[A-Z]/.test(m[2])) out.push({ day: DAY_NAMES[m[2]], index: m.index! });
+  }
+  return out;
+}
+
+function sentenceAround(text: string, index: number): [number, number] {
+  const boundary = /[.!?](?=\s)|\n/g;
+  let start = 0;
+  let end = text.length;
+  for (const m of text.matchAll(boundary)) {
+    if (m.index! < index) start = m.index! + 1;
+    else {
+      end = m.index!;
+      break;
+    }
+  }
+  return [start, end];
+}
+
+/**
+ * The day a price or discount at index is applied to: the nearest weekday
+ * named in the same sentence; else the latest availability result's day when
+ * the sentence names one of its slot times; else null (a general statement).
+ */
+function dayContext(text: string, index: number, facts: Facts): Weekday | null {
+  const [start, end] = sentenceAround(text, index);
+  const near = dayMentions(text)
+    .filter((d) => d.index >= start && d.index < end)
+    .sort((a, b) => Math.abs(a.index - index) - Math.abs(b.index - index))[0];
+  if (near) return near.day;
+  const sentence = text.slice(start, end);
+  const avail = facts.availability;
+  if (avail && avail.slots.some((s) => sentence.includes(s.time))) return avail.weekday as Weekday;
+  return null;
 }
 
 /** "Kids cut (under 12)" -> ["Kids cut (under 12)", "Kids cut"]: the name, and the name without a trailing bracketed qualifier. */
@@ -154,14 +211,44 @@ export function verifyText(text: string, facts: Facts): Verdict {
       return;
     }
     const ok = byService.get(id)!.has(cents);
-    const name = brain.services.find((s) => s.id === id)!.name;
-    checks.push({ rule: "service_price", claim: `${name} ${claim}`, pass: ok, ...(!ok && { detail: `${name} is not priced ${money(cents)}` }) });
+    const service = brain.services.find((s) => s.id === id)!;
+    const name = service.name;
+    if (!ok || cents === service.priceCents) {
+      checks.push({ rule: "service_price", claim: `${name} ${claim}`, pass: ok, ...(!ok && { detail: `${name} is not priced ${money(cents)}` }) });
+      return;
+    }
+    // A discounted price: the rule's conditions must hold on the day it is applied to.
+    const rules = rulesFor(brain, id).filter((r) => discountedCents(service, r) === cents);
+    const day = dayContext(text, m.index!, facts);
+    const holds = day ? rules.some((r) => ruleHoldsOn(r, day)) : rules.some((r) => r.weekdays.length === 0);
+    const when = rules.flatMap((r) => r.weekdays).join("/");
+    checks.push({
+      rule: "discount_condition",
+      claim: `${name} ${claim}${day ? ` on ${day}` : ""}`,
+      pass: holds,
+      ...(!holds && {
+        detail: day
+          ? `${money(cents)} is the ${name} price on ${when} only, not ${day}`
+          : `${money(cents)} is a discounted ${name} price; say the day it applies to (${when})`,
+      }),
+    });
   });
 
-  const percents = new Set(brain.discounts.flatMap((d) => (d.percentOff !== null ? [d.percentOff] : [])));
   for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?%/g)) {
-    const ok = percents.has(Number(m[1]));
-    checks.push({ rule: "discount", claim: m[0], pass: ok, ...(!ok && { detail: `no ${m[0]} discount in the approved brain` }) });
+    const rules = brain.discounts.filter((d) => d.percentOff === Number(m[1]));
+    if (rules.length === 0) {
+      checks.push({ rule: "discount", claim: m[0], pass: false, detail: `no ${m[0]} discount in the approved brain` });
+      continue;
+    }
+    // Stating the rule passes; applying it to a named day passes only if a rule holds on that day.
+    const day = dayContext(text, m.index!, facts);
+    const holds = !day || rules.some((r) => ruleHoldsOn(r, day));
+    checks.push({
+      rule: "discount",
+      claim: `${m[0]}${day ? ` on ${day}` : ""}`,
+      pass: holds,
+      ...(!holds && { detail: `${m[0]} off holds on ${rules.flatMap((r) => r.weekdays).join("/")} only, not ${day}` }),
+    });
   }
 
   const durations = new Set(brain.services.map((s) => s.durationMin));

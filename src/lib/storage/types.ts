@@ -122,6 +122,12 @@ export type Booking = {
   status: BookingStatus;
   approvalId: string | null;
   createdAt: string;
+  /** Price computed by the booking tool (discount applied when its conditions hold); null on older rows. */
+  priceCents: number | null;
+  currency: string | null;
+  discountId: string | null;
+  /** One booking per key: a retried or resumed request returns the existing booking. */
+  idempotencyKey: string | null;
 };
 
 export type SpendEntry = {
@@ -170,6 +176,10 @@ export type NewBookingRequest = {
   customerName?: string | null;
   customerContact?: string | null;
   startsAt: string;
+  priceCents?: number | null;
+  currency?: string | null;
+  discountId?: string | null;
+  idempotencyKey?: string | null;
 };
 
 export type NewApproval = {
@@ -218,8 +228,13 @@ export interface Storage extends SpendLedgerStore {
   appendTurn(input: NewTurn): Promise<Turn>;
   listTurns(conversationId: string): Promise<Turn[]>;
 
-  /** Creates a pending booking and the owner approval that gates it. */
-  requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval }>;
+  /**
+   * Creates a pending booking and the owner approval that gates it. With an
+   * idempotency key already used, returns that booking (existing: true).
+   * Throws SlotTakenError when the business already has a pending or confirmed
+   * booking starting at the same time.
+   */
+  requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval; existing: boolean }>;
   createApproval(input: NewApproval): Promise<PendingApproval>;
   getApproval(id: string): Promise<PendingApproval | null>;
   /**

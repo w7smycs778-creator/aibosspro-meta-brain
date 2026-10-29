@@ -8,5 +8,8 @@ export function bookingPayload(input: NewBookingRequest): Record<string, unknown
     customerRef: input.customerRef,
     customerName: input.customerName ?? null,
     customerContact: input.customerContact ?? null,
+    priceCents: input.priceCents ?? null,
+    currency: input.currency ?? null,
+    discountId: input.discountId ?? null,
   };
 }

@@ -132,7 +132,7 @@ describe("POST events", () => {
     expect(res.status).toBe(401);
   });
 
-  it("passes the message to handleInbound and sends its reply", async () => {
+  it("passes the message to handleInbound; the engine, not the route, sends the reply", async () => {
     const res = await post(textEvent("wamid.p3", "Do you have Thursday 10:00?"));
     expect(res.status).toBe(200);
     await flush();
@@ -145,13 +145,8 @@ describe("POST events", () => {
       text: "Do you have Thursday 10:00?",
       externalEventId: "wamid.p3",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`https://graph.facebook.com/v25.0/${PHONE_ID}/messages`);
-    expect((init.headers as Record<string, string>).Authorization).toBe(["Bear", "er"].join("") + " " + ACCESS_TOKEN);
-    const sent = JSON.parse(init.body as string);
-    expect(sent.to).toBe("15550001234");
-    expect(sent.text.body).toBe(ENGINE_REPLY);
+    // Delivery happens inside handleInbound (mocked here), after its last takeover check.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing when the engine has no reply", async () => {
@@ -168,7 +163,6 @@ describe("POST events", () => {
     expect((await post(body)).status).toBe(200);
     await flush();
     expect(engine.handleInbound).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores status updates and non-text messages", async () => {

@@ -1,7 +1,7 @@
 // Owner actions and the owner screen's view of the store.
-import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage } from "../storage/types";
+import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage, Turn } from "../storage/types";
+import { channelDeliver, deliverAndRecord, type Deliver, type DeliveryResult } from "./delivery";
 import { formatWithZone } from "./display";
-import { formatLocal } from "./time";
 
 export type Decision = "approved" | "rejected";
 
@@ -9,34 +9,59 @@ export type DecisionResult = {
   approval: PendingApproval;
   changed: boolean;
   booking: Booking | null;
-  /** Customer reply recorded for the decision; null on a no-op. */
+  /** Customer reply sent for the decision; null on a no-op. */
   replyText: string | null;
+  delivery: DeliveryResult | null;
 };
 
 /**
- * Approve: booking becomes CONFIRMED and a confirmation reply is recorded.
- * Reject: booking becomes REJECTED and a reply offering another time is drafted.
- * A second decision on the same approval changes nothing.
+ * Approve: booking becomes CONFIRMED and a confirmation goes to the customer.
+ * Reject: booking becomes REJECTED and the customer is offered another time.
+ * Either reply goes out on the conversation's own channel and names the time
+ * with the business zone. A second decision on the same approval changes nothing.
  */
-export async function decideBooking(store: Storage, approvalId: string, decision: Decision): Promise<DecisionResult> {
+export async function decideBooking(store: Storage, approvalId: string, decision: Decision, deliver: Deliver = channelDeliver): Promise<DecisionResult> {
   const { approval, changed } = await store.decideApproval(approvalId, decision);
   const booking = (await store.listBookings(approval.businessId)).find((b) => b.approvalId === approvalId) ?? null;
-  if (!changed || !booking || !approval.conversationId) return { approval, changed, booking, replyText: null };
+  const conversation = approval.conversationId ? await store.getConversation(approval.conversationId) : null;
+  if (!changed || !booking || !conversation) return { approval, changed, booking, replyText: null, delivery: null };
 
-  const brain = (await store.getBrain(approval.businessId, { approvedOnly: true }))!.brain;
-  const service = brain.services.find((s) => s.id === booking.serviceId)?.name ?? booking.serviceId;
-  const when = formatLocal(booking.startsAt, brain.timezone);
+  const versions = await store.listBrainVersions(approval.businessId);
+  const current = versions.find((v) => v.approved)!.brain;
+  const service =
+    brainAt(versions, booking.createdAt)?.brain.services.find((s) => s.id === booking.serviceId)?.name ?? booking.serviceId;
+  const when = formatWithZone(booking.startsAt, current.timezone);
   const replyText =
     decision === "approved"
       ? `Good news: your ${service} on ${when} is confirmed. See you then.`
       : `Sorry, the ${service} on ${when} isn't available after all. Would you like me to check another time?`;
-  await store.appendTurn({
-    conversationId: approval.conversationId,
+  const turn = await store.appendTurn({
+    conversationId: conversation.id,
     role: "assistant",
     content: replyText,
-    checkpoint: { kind: "owner_decision", decision, approvalId, bookingId: booking.id, draft: decision === "rejected" },
+    checkpoint: { kind: "owner_decision", decision, approvalId, bookingId: booking.id, text: replyText, delivery: "pending" },
   });
-  return { approval, changed, booking, replyText };
+  const delivery = await deliverAndRecord(store, deliver, conversation, turn, replyText);
+  return { approval, changed, booking, replyText, delivery };
+}
+
+/**
+ * The owner writes to the customer: the conversation switches to HUMAN (the
+ * engine stops, including mid-turn), the message is recorded as an owner turn
+ * and sent on the conversation's channel.
+ */
+export async function sendOwnerMessage(
+  store: Storage,
+  conversationId: string,
+  text: string,
+  deliver: Deliver = channelDeliver,
+): Promise<{ turn: Turn; delivery: DeliveryResult; conversation: Conversation }> {
+  const body = text.trim();
+  if (!body) throw new Error("message is empty");
+  const conversation = await store.updateConversation(conversationId, { mode: "HUMAN", state: "active" });
+  const turn = await store.appendTurn({ conversationId, role: "owner", content: body, checkpoint: { kind: "owner_message", text: body, delivery: "pending" } });
+  const delivery = await deliverAndRecord(store, deliver, conversation, turn, body);
+  return { turn, delivery, conversation };
 }
 
 /** Owner switch per conversation; switching also returns it to the engine (state active). */

@@ -1,7 +1,6 @@
 import { after } from "next/server";
 import { handleInbound } from "@/lib/engine/conversation-service";
 import { SEED_BUSINESS_ID } from "@/lib/storage/seed";
-import { sendText } from "@/lib/whatsapp/send";
 import { safeEqual, verifySignature } from "@/lib/whatsapp/signature";
 import { getStore } from "@/lib/storage";
 import { extractTextMessages, last4, type InboundText } from "@/lib/whatsapp/webhook";
@@ -24,7 +23,7 @@ export function GET(req: Request): Response {
 /** One WhatsApp number serves one business; the seeded demo business until onboarding exists. */
 const businessId = () => process.env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID;
 
-/** Signed event delivery. Responds first; the engine runs and replies after the response. */
+/** Signed event delivery. Responds first; the engine runs, and replies on WhatsApp, after the response. */
 export async function POST(req: Request): Promise<Response> {
   const raw = Buffer.from(await req.arrayBuffer());
   if (!verifySignature(raw, req.headers.get("x-hub-signature-256"), process.env.META_APP_SECRET)) {
@@ -65,10 +64,8 @@ export async function POST(req: Request): Promise<Response> {
             text: m.text,
             externalEventId: m.id,
           });
-          console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome });
-          if (!result.replyText) continue;
-          const res = await sendText(m.from, result.replyText);
-          console.log("whatsapp reply", { id: m.id, from4: last4(m.from), status: res.status });
+          // The engine sends the reply itself, after a last takeover check, and records the delivery.
+          console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome, delivery: result.delivery ?? null });
         } catch (err) {
           console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name });
         }

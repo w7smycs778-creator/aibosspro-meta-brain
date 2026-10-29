@@ -19,6 +19,8 @@ export type ToolSpec = ToolDefinition & {
   access: "read" | "write" | "escalate";
   /** Running it ends the turn in owner help. */
   endsTurn?: boolean;
+  /** For tools with side effects: the key that makes a retried or resumed call return the first result. */
+  idempotencyKey?(args: Record<string, unknown>, ctx: ToolContext): string;
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 };
 

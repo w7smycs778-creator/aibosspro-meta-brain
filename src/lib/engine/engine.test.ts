@@ -60,6 +60,7 @@ const AVAIL: AvailabilityResult = {
   date: DEMO_DATE,
   weekday: "thu",
   service: { id: "cut_and_beard", name: "Cut + beard", durationMin: 45, priceCents: 5000 },
+  price: { priceCents: 5000, currency: "USD", discountId: null },
   slots: [{ slot: `${DEMO_DATE}T10:00`, time: "10:00", startsAt: "2026-11-05T08:00:00.000Z" }],
 };
 const facts = (over: Partial<Facts> = {}): Facts => ({ brain: SEED_BRAIN, availability: AVAIL, bookings: [], ...over });
@@ -259,14 +260,16 @@ describe("owner decisions", () => {
     expect(decisions).toHaveLength(1);
   });
 
-  it("reject flips PENDING to REJECTED and drafts a customer reply", async () => {
+  it("reject flips PENDING to REJECTED and sends a reply offering another time", async () => {
     const s = store();
     const { results } = await runDemo(s);
     const r = await decideBooking(s, results[2].pendingApprovalId!, "rejected");
     expect(r).toMatchObject({ changed: true, booking: { status: "rejected" } });
     expect(r.replyText).toContain("another time");
-    const draft = (await s.listTurns(results[0].conversationId!)).find((t) => t.checkpoint?.kind === "owner_decision")!;
-    expect(draft.checkpoint).toMatchObject({ decision: "rejected", draft: true });
+    const turns = await s.listTurns(results[0].conversationId!);
+    const reply = turns.find((t) => t.checkpoint?.kind === "owner_decision")!;
+    expect(reply.checkpoint).toMatchObject({ decision: "rejected", delivery: "pending" });
+    expect(turns.find((t) => t.checkpoint?.kind === "outbound_result" && t.checkpoint.outboundTurnId === reply.id)?.checkpoint).toMatchObject({ status: "sent" });
   });
 });
 

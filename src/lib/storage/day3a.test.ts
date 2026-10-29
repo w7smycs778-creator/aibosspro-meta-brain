@@ -136,8 +136,15 @@ describe("tool-call loop", () => {
     expect(client.calls[0].tools?.map((t) => t.name)).toEqual(ENGINE_TOOLS.map((t) => t.name));
     const turns = await store.listTurns(conversation.id);
     expect(turns.map((t) => t.checkpoint?.kind ?? t.role)).toEqual([
-      "customer", "tool_call", "tool_result", "tool_call", "tool_result", "tool_call", "tool_result", "final",
+      "customer",
+      "tool_call", "tool_pending", "tool_result",
+      "tool_call", "tool_pending", "tool_result",
+      "tool_call", "tool_pending", "tool_result",
+      "final",
     ]);
+    // The booking call is recorded with its idempotency key before and after the side effect.
+    const pending = turns.find((t) => t.checkpoint?.kind === "tool_pending" && (t.checkpoint.toolCall as { name: string }).name === "request_booking")!;
+    expect(pending.checkpoint!.idempotencyKey).toBe(`request_booking:${conversation.id}:cut_and_beard:${DEMO_DATE}T10:00`);
     expect(turns.filter((t) => t.checkpoint?.kind === "tool_result").every((t) => (t.checkpoint!.result as { ok: boolean }).ok)).toBe(true);
 
     const [booking] = await store.listBookings(conversation.businessId);
@@ -150,9 +157,9 @@ describe("tool-call loop", () => {
   });
 
   it("refuses a non-permitted tool, logs it, and ends in owner help", async () => {
-    const { store, conversation, turn } = await setup("HUMAN");
+    const { store, conversation, turn } = await setup("AUTO");
     const { client, gateway } = mockGateway(store, 10, [
-      { toolCall: { name: "request_booking", arguments: { service: "classic_cut", slot: `${DEMO_DATE}T10:00`, customer_name: "Sam", customer_contact: "x" } } },
+      { toolCall: { name: "issue_refund", arguments: { amount: 50 } } },
       { text: "never reached" },
     ]);
 
@@ -160,14 +167,21 @@ describe("tool-call loop", () => {
 
     expect(r).toMatchObject({ status: "owner_help", reason: "tool_not_permitted", iterations: 1 });
     expect(client.calls).toHaveLength(1);
-    const readOnly = ["list_services", "get_hours", "check_availability", "request_owner_help"];
-    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(readOnly);
+    const permitted = ENGINE_TOOLS.map((t) => t.name);
+    expect(client.calls[0].tools?.map((t) => t.name)).toEqual(permitted);
     const turns = await store.listTurns(conversation.id);
     const refused = turns.find((t) => t.checkpoint?.kind === "tool_refused");
-    expect(refused?.checkpoint).toMatchObject({ reason: "not_permitted", permitted: readOnly, toolCall: { name: "request_booking" } });
+    expect(refused?.checkpoint).toMatchObject({ reason: "not_permitted", permitted, toolCall: { name: "issue_refund" } });
     expect(turns.at(-1)?.checkpoint).toMatchObject({ kind: "owner_help", reason: "tool_not_permitted" });
     expect((await store.getConversation(conversation.id))!.state).toBe("owner_help");
     expect(await store.listBookings(conversation.businessId)).toEqual([]);
+  });
+
+  it("does nothing in HUMAN mode: the owner is handling the conversation", async () => {
+    const { store, conversation, turn } = await setup("HUMAN");
+    const { client, gateway } = mockGateway(store, 10, [{ text: "never sent" }]);
+    expect(await loop(store, gateway, conversation.id, turn.id)).toMatchObject({ status: "not_active" });
+    expect(client.calls).toHaveLength(0);
   });
 
   it("stops at max iterations and hands to the owner", async () => {

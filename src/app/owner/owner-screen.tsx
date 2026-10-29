@@ -32,6 +32,7 @@ export function OwnerScreen() {
   const [panelConversationId, setPanelConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<PanelMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -66,6 +67,17 @@ export function OwnerScreen() {
     const r = await post(`/api/approvals/${id}/${decision}`);
     if (r.replyText && conversationId && conversationId === panelConversationId) {
       setMessages((m) => [...m, { who: "owner", text: `${decision === "reject" ? "Draft: " : ""}${r.replyText}` }]);
+    }
+    await refresh();
+  }
+
+  async function sendAsOwner(id: string) {
+    const text = (ownerDrafts[id] ?? "").trim();
+    if (!text) return;
+    const r = await post(`/api/conversations/${id}/owner-message`, { text });
+    if (r.turn) {
+      setOwnerDrafts((d) => ({ ...d, [id]: "" }));
+      if (id === panelConversationId) setMessages((m) => [...m, { who: "owner", text: `Owner: ${text}` }]);
     }
     await refresh();
   }
@@ -154,6 +166,21 @@ export function OwnerScreen() {
                   </span>
                 </div>
                 {c.lastCustomerMessage && <p className="mt-1 truncate text-gray-500">Last: {c.lastCustomerMessage}</p>}
+                <form
+                  className="mt-2 flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void sendAsOwner(c.id);
+                  }}
+                >
+                  <input
+                    value={ownerDrafts[c.id] ?? ""}
+                    onChange={(e) => setOwnerDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
+                    placeholder="Reply as the owner (switches to HUMAN)"
+                    className="flex-1 rounded border px-2 py-1"
+                  />
+                  <button className="rounded border px-2 py-1 hover:bg-gray-100">Send as owner</button>
+                </form>
               </li>
             ))}
           </ul>

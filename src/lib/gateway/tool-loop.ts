@@ -30,6 +30,14 @@ export type ToolLoopInput = {
   maxIterations?: number;
   /** Deterministic check run before a final message or tool call is accepted. */
   verify?: (step: ProposedStep) => Promise<StepVerdict>;
+  /**
+   * Takeover check, run before every model call and every tool execution.
+   * Returns a reason when the owner has taken the conversation over; the turn
+   * then stops with no further model calls and no tool side effects.
+   */
+  interrupt?: () => Promise<string | null>;
+  /** Brain version the turn runs under; recorded on every checkpoint. */
+  brainVersion?: number;
   now?: () => Date;
 };
 
@@ -45,6 +53,7 @@ export type OwnerHelpReason =
 export type ToolLoopResult =
   | { status: "final"; text: string; iterations: number }
   | { status: "owner_help"; reason: OwnerHelpReason; detail: string; iterations: number }
+  | { status: "taken_over"; point: "before_model" | "before_tool"; detail: string; iterations: number }
   | { status: "not_active"; detail: string };
 
 /** One correction each per turn: for output outside the protocol, and for a verifier block. */
@@ -56,7 +65,8 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   const maxIterations = input.maxIterations ?? loadMaxToolIterations();
   const conversation = await store.getConversation(conversationId);
   if (!conversation) throw new Error(`conversation ${conversationId} not found`);
-  if (conversation.mode === "PAUSED" || conversation.state !== "active") {
+  // The engine acts only in AUTO; HUMAN means the owner is handling the conversation.
+  if (conversation.mode !== "AUTO" || conversation.state !== "active") {
     return { status: "not_active", detail: `mode ${conversation.mode}, state ${conversation.state}` };
   }
 
@@ -73,8 +83,16 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   let protocolRetries = 0;
   let verifierCorrections = 0;
 
+  let step = 0;
   const checkpoint = (role: "assistant" | "tool" | "system", content: string, cp: Checkpoint) =>
-    store.appendTurn({ conversationId, role, content, checkpoint: { turnId, ...cp } });
+    store.appendTurn({ conversationId, role, content, checkpoint: { turnId, step: ++step, brainVersion: input.brainVersion ?? null, ...cp } });
+
+  const takenOver = async (point: "before_model" | "before_tool", iteration: number): Promise<ToolLoopResult | null> => {
+    const reason = await input.interrupt?.();
+    if (!reason) return null;
+    await checkpoint("system", "Taken over by the owner.", { kind: "taken_over", point, reason, iteration });
+    return { status: "taken_over", point, detail: reason, iterations: iteration };
+  };
 
   const ownerHelp = async (reason: OwnerHelpReason, detail: string, iterations: number, extra: Checkpoint = {}): Promise<ToolLoopResult> => {
     await checkpoint("system", "Handed to the owner.", { kind: "owner_help", reason, detail, iteration: iterations, ...extra });
@@ -131,6 +149,8 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   };
 
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
+    const stopBeforeModel = await takenOver("before_model", iteration);
+    if (stopBeforeModel) return stopBeforeModel;
     const r = await gateway.call({
       kind: "chat",
       model: input.model,
@@ -191,8 +211,13 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
       }
       if (v !== "pass") return v;
 
+      const stopBeforeTool = await takenOver("before_tool", iteration);
+      if (stopBeforeTool) return stopBeforeTool;
+      // Recorded before the side effect, so a crash between the two is resumed with the same key.
+      const idempotencyKey = tool.idempotencyKey?.(call.arguments, ctx) ?? `${turnId}:${call.id}`;
+      await checkpoint("tool", `Running ${tool.name}.`, { kind: "tool_pending", iteration, toolCall: call, idempotencyKey });
       const result = await execute(tool, call, ctx);
-      await checkpoint("tool", JSON.stringify(result), { kind: "tool_result", iteration, toolCall: call, result });
+      await checkpoint("tool", JSON.stringify(result), { kind: "tool_result", iteration, toolCall: call, idempotencyKey, result });
       if (tool.endsTurn && result.ok) {
         return ownerHelp("requested_by_model", String(call.arguments.reason ?? ""), iteration);
       }
@@ -204,7 +229,7 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   return ownerHelp("max_iterations", `no final message after ${maxIterations} iterations`, maxIterations);
 }
 
-async function execute(tool: ToolSpec, call: ToolCallRequest, ctx: ToolContext): Promise<ToolCallResult> {
+export async function execute(tool: ToolSpec, call: ToolCallRequest, ctx: ToolContext): Promise<ToolCallResult> {
   try {
     return { callId: call.id, name: tool.name, ok: true, output: await tool.execute(call.arguments, ctx) };
   } catch (err) {

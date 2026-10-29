@@ -23,3 +23,21 @@ export function refuseStartOnBadConfig(env: Env = process.env): void {
     process.exit(1);
   }
 }
+
+/**
+ * Finishes turns a previous process left half done (a recorded tool call with
+ * no result, a reply still pending delivery). No model calls. Best effort: a
+ * failure is logged and the server keeps starting.
+ */
+export async function resumeAtStartup(env: Env = process.env): Promise<void> {
+  try {
+    const { getStore } = await import("./storage");
+    const { resumeBusiness } = await import("./engine/resume");
+    const { channelDeliver } = await import("./engine/delivery");
+    const { SEED_BUSINESS_ID } = await import("./storage/seed");
+    const report = await resumeBusiness({ store: await getStore(), deliver: channelDeliver, now: () => new Date() }, env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID);
+    console.log("resume at startup", report);
+  } catch (err) {
+    console.error("resume at startup failed", { error: err instanceof Error ? err.message : String(err) });
+  }
+}

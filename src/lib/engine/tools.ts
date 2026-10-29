@@ -2,6 +2,8 @@
 // storage. No tool confirms a booking: request_booking only creates a pending
 // booking and the owner approval that gates it.
 import type { ToolContext, ToolSpec } from "../gateway/tools";
+import { SlotTakenError } from "../storage/errors";
+import { priceOn } from "./discounts";
 import type { BusinessBrain, Service } from "../storage/types";
 import { formatLocal, hhmm, localDate, localToUtc, minutes, weekdayOf } from "./time";
 
@@ -13,6 +15,8 @@ export type AvailabilityResult = {
   date: string;
   weekday: string;
   service: { id: string; name: string; durationMin: number; priceCents: number };
+  /** The price on this date: the list price, or the discounted price when a rule's conditions hold. */
+  price: { priceCents: number; currency: string; discountId: string | null };
   slots: Slot[];
 };
 
@@ -58,6 +62,7 @@ export async function availability(ctx: ToolContext, brain: BusinessBrain, date:
     date,
     weekday,
     service: { id: service.id, name: service.name, durationMin: service.durationMin, priceCents: service.priceCents },
+    price: { ...priceOn(brain, service, weekday), currency: service.currency || brain.currency },
     slots,
   };
 }
@@ -119,33 +124,51 @@ export const requestBookingTool: ToolSpec = {
     additionalProperties: false,
   },
   access: "write",
+  // One booking per conversation, service and slot: a retried or resumed call returns the first booking.
+  idempotencyKey: (args, ctx) => `request_booking:${ctx.conversationId}:${String(args.service)}:${String(args.slot)}`,
   async execute(args, ctx) {
     const brain = await approvedBrain(ctx);
     const service = resolveService(brain, args.service as string);
     const slot = args.slot as string;
     const m = slot.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
     if (!m) throw new Error('slot must look like "YYYY-MM-DDTHH:MM"');
-    // Re-checked here so a slot taken since the last lookup is never requested.
+    const key = requestBookingTool.idempotencyKey!(args, ctx);
+    const prior = (await ctx.store.listBookings(ctx.businessId)).find((b) => b.idempotencyKey === key);
+    // Re-checked here so a slot taken since the last lookup is never requested; a resumed call finds its own booking first.
     const open = await availability(ctx, brain, m[1], service);
     const hit = open.slots.find((s) => s.slot === slot);
-    if (!hit) throw new Error(`slot ${slot} is not open for ${service.name}`);
-    const { booking, approval } = await ctx.store.requestBooking({
-      businessId: ctx.businessId,
-      conversationId: ctx.conversationId,
-      serviceId: service.id,
-      customerRef: ctx.customerRef,
-      customerName: (args.customer_name as string).trim(),
-      customerContact: (args.customer_contact as string).trim(),
-      startsAt: hit.startsAt,
-    });
-    return {
-      bookingId: booking.id,
-      approvalId: approval.id,
-      status: booking.status,
-      slot,
-      when: formatLocal(hit.startsAt, brain.timezone),
-      service: service.name,
-    };
+    if (!hit && !prior) throw new Error(`slot ${slot} is not open for ${service.name}`);
+    const startsAt = hit?.startsAt ?? prior!.startsAt;
+    try {
+      const { booking, approval, existing } = await ctx.store.requestBooking({
+        businessId: ctx.businessId,
+        conversationId: ctx.conversationId,
+        serviceId: service.id,
+        customerRef: ctx.customerRef,
+        customerName: (args.customer_name as string).trim(),
+        customerContact: (args.customer_contact as string).trim(),
+        startsAt,
+        priceCents: open.price.priceCents,
+        currency: open.price.currency,
+        discountId: open.price.discountId,
+        idempotencyKey: key,
+      });
+      return {
+        bookingId: booking.id,
+        approvalId: approval.id,
+        status: booking.status,
+        slot,
+        when: formatLocal(booking.startsAt, brain.timezone),
+        service: service.name,
+        priceCents: booking.priceCents,
+        currency: booking.currency,
+        discountId: booking.discountId,
+        ...(existing && { existing: true }),
+      };
+    } catch (err) {
+      if (err instanceof SlotTakenError) throw new Error(`slot ${slot} is no longer available for ${service.name}`);
+      throw err;
+    }
   },
 };
 

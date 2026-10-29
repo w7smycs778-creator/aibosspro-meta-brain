@@ -7,6 +7,8 @@ import { SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
 import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
 import { brainFacts } from "./brain-prompt";
+import { channelDeliver, deliverAndRecord } from "./delivery";
+import { resumeConversation } from "./resume";
 import { localDate, weekdayOf } from "./time";
 import { ENGINE_TOOLS } from "./tools";
 import { latestAvailability, verifyText, verifyToolCall, type Facts } from "./verifier";
@@ -28,6 +30,8 @@ export type InboundResult = {
   state: ConversationState | null;
   mode: ConversationMode | null;
   outcome: ToolLoopResult["status"] | "duplicate" | "model_unavailable";
+  /** Set when a reply was recorded: whether it went out on the channel. */
+  delivery?: "sent" | "failed" | "suppressed";
   pendingApprovalId?: string;
   /** Every turn recorded for this message, customer turn first. */
   trace: Turn[];
@@ -41,9 +45,19 @@ function initialMode(input: InboundInput): ConversationMode | undefined {
   return input.channel === "panel" && input.businessId === SEED_BUSINESS_ID ? "AUTO" : undefined;
 }
 
+/** Why the engine must stop for this turn, or null: the mode left AUTO, or the owner wrote after the customer. */
+export async function takeoverReason(store: Storage, conversationId: string, sinceSeq: number): Promise<string | null> {
+  const c = await store.getConversation(conversationId);
+  if (!c) return "conversation missing";
+  if (c.mode !== "AUTO") return `mode is ${c.mode}`;
+  const owner = (await store.listTurns(conversationId)).some((t) => t.role === "owner" && t.seq > sinceSeq);
+  return owner ? "the owner replied" : null;
+}
+
 export async function handleInbound(input: InboundInput, deps?: EngineDeps): Promise<InboundResult> {
   const d = deps ?? (await engineDeps());
   const { store } = d;
+  const deliver = d.deliver ?? channelDeliver;
 
   if (!(await store.claimEvent(`engine:${input.channel}`, input.externalEventId))) {
     return { duplicate: true, conversationId: null, replyText: null, state: null, mode: null, outcome: "duplicate", trace: [] };
@@ -60,6 +74,8 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       customerRef: input.senderId,
       mode: initialMode(input),
     }));
+  // Finish anything a crash left half done before taking the new message.
+  await resumeConversation({ store, deliver, now: d.now }, conversation.id);
   const history = await store.listTurns(conversation.id);
   const customerTurn = await store.appendTurn({
     conversationId: conversation.id,
@@ -71,7 +87,12 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
 
   let outcome: InboundResult["outcome"];
   let replyText: string | null = null;
-  if (!d.gateway) {
+  const interrupt = () => takeoverReason(store, conversation.id, customerTurn.seq);
+  const current = (await store.getConversation(conversation.id))!;
+  if (current.mode !== "AUTO" || current.state !== "active") {
+    // HUMAN or PAUSED: the owner handles it; the customer turn is recorded and nothing else happens.
+    outcome = "not_active";
+  } else if (!d.gateway) {
     await store.appendTurn({
       conversationId: conversation.id,
       role: "system",
@@ -92,6 +113,8 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       maxOutputTokens: ENGINE_MAX_OUTPUT_TOKENS,
       reasoningEffort: ENGINE_REASONING_EFFORT,
       verify: (step) => verifyStep(store, conversation.id, brainVersion.brain, step),
+      interrupt,
+      brainVersion: brainVersion.version,
       now: d.now,
     });
     outcome = result.status;
@@ -107,6 +130,31 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
     });
   }
 
+  let delivery: InboundResult["delivery"];
+  if (replyText) {
+    const outbound = await store.appendTurn({
+      conversationId: conversation.id,
+      role: "system",
+      content: replyText,
+      checkpoint: { turnId: customerTurn.id, kind: "outbound", text: replyText, delivery: "pending", brainVersion: brainVersion.version },
+    });
+    const reason = await interrupt();
+    if (reason) {
+      await store.appendTurn({
+        conversationId: conversation.id,
+        role: "system",
+        content: "Reply not sent: the owner took the conversation over.",
+        checkpoint: { turnId: customerTurn.id, kind: "outbound_result", outboundTurnId: outbound.id, status: "suppressed", reason },
+      });
+      await store.appendTurn({ conversationId: conversation.id, role: "system", content: "Taken over by the owner.", checkpoint: { turnId: customerTurn.id, kind: "taken_over", point: "before_send", reason } });
+      outcome = "taken_over";
+      replyText = null;
+      delivery = "suppressed";
+    } else {
+      delivery = (await deliverAndRecord(store, deliver, current, outbound, replyText)).ok ? "sent" : "failed";
+    }
+  }
+
   const after = (await store.getConversation(conversation.id))!;
   const trace = (await store.listTurns(conversation.id)).filter((t) => t.seq >= customerTurn.seq);
   return {
@@ -116,6 +164,7 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
     state: after.state,
     mode: after.mode,
     outcome,
+    ...(delivery && { delivery }),
     pendingApprovalId: pendingApprovalFrom(trace),
     trace,
   };
@@ -156,8 +205,12 @@ export function buildMessages(brain: BusinessBrain, version: number, history: Tu
     ...(availability ? [`Latest availability result: ${JSON.stringify(availability)}`] : []),
   ].join("\n");
   const past: ChatMessage[] = history
-    .filter((t) => t.role === "customer" || (t.role === "assistant" && REPLY_KINDS.has(String(t.checkpoint?.kind))))
+    .filter((t) => t.role === "customer" || t.role === "owner" || (t.role === "assistant" && REPLY_KINDS.has(String(t.checkpoint?.kind))))
     .slice(-HISTORY_TURNS)
-    .map((t) => (t.role === "customer" ? { role: "user", content: t.content } : { role: "assistant", content: t.content }));
+    .map((t): ChatMessage =>
+      t.role === "customer"
+        ? { role: "user", content: t.content }
+        : { role: "assistant", content: t.role === "owner" ? `[Owner, in person] ${t.content}` : t.content },
+    );
   return [{ role: "system", content: system }, ...past, { role: "user", content: text }];
 }

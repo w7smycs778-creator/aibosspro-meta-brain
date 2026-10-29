@@ -1,13 +1,13 @@
 // Postgres store through Supabase with the service-role key. Server only: the
 // key bypasses RLS, so this module must never be imported by client code.
-// Tables and ledger functions: supabase/migrations/ (20261027120000 through 20261029200000).
+// Tables and ledger functions: supabase/migrations/ (20261027120000 through 20261029210000).
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../gateway/types";
 import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, SpendUsage } from "../gateway/ledger";
 import type { NanoUsd } from "../gateway/money";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
-import { StorageConfigError } from "./errors";
+import { SlotTakenError, StorageConfigError } from "./errors";
 import { upgradeBrain } from "./brain";
 import { bookingPayload } from "./payload";
 import type {
@@ -244,7 +244,9 @@ export class SupabaseStore implements Storage {
     return (rows as Row[]).map(toTurn);
   }
 
-  async requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval }> {
+  async requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval; existing: boolean }> {
+    const prior = input.idempotencyKey ? await this.bookingByKey(input.idempotencyKey) : null;
+    if (prior) return prior;
     const approval = await this.createApproval({
       businessId: input.businessId,
       conversationId: input.conversationId,
@@ -264,15 +266,33 @@ export class SupabaseStore implements Storage {
         starts_at: input.startsAt,
         status: "pending_approval",
         approval_id: approval.id,
+        price_cents: input.priceCents ?? null,
+        currency: input.currency ?? null,
+        discount_id: input.discountId ?? null,
+        idempotency_key: input.idempotencyKey ?? null,
       })
       .select()
       .single();
     if (res.error) {
       // No orphan approval for a booking that was never written.
       await this.db.from("approvals").delete().eq("id", approval.id);
+      if (res.error.code === "23505") {
+        // A concurrent request with the same key won the race: return its booking.
+        const winner = input.idempotencyKey ? await this.bookingByKey(input.idempotencyKey) : null;
+        if (winner) return winner;
+        if (/active_slot/.test(res.error.message)) throw new SlotTakenError(input.startsAt);
+      }
     }
-    return { booking: toBooking(check(res, "requestBooking")), approval };
+    return { booking: toBooking(check(res, "requestBooking")), approval, existing: false };
   }
+
+  private async bookingByKey(key: string): Promise<{ booking: Booking; approval: PendingApproval; existing: true } | null> {
+    const row = check(await this.db.from("bookings").select("*").eq("idempotency_key", key).maybeSingle(), "bookingByKey") as Row | null;
+    if (!row) return null;
+    const approval = (await this.getApproval(row.approval_id))!;
+    return { booking: toBooking(row), approval, existing: true };
+  }
+
 
   async createApproval(input: NewApproval): Promise<PendingApproval> {
     const r = check(
@@ -487,5 +507,9 @@ function toBooking(r: Row): Booking {
     status: r.status,
     approvalId: r.approval_id ?? null,
     createdAt: r.created_at,
+    priceCents: r.price_cents ?? null,
+    currency: r.currency ?? null,
+    discountId: r.discount_id ?? null,
+    idempotencyKey: r.idempotency_key ?? null,
   };
 }

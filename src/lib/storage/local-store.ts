@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { resolve, sep } from "node:path";
 import type { LedgerLimits, LedgerSnapshot, ReserveRequest, ReserveResult, SpendUsage } from "../gateway/ledger";
 import type { NanoUsd } from "../gateway/money";
-import { StorageConfigError } from "./errors";
+import { SlotTakenError, StorageConfigError } from "./errors";
 import { upgradeBrain } from "./brain";
 import { bookingPayload } from "./payload";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "./seed";
@@ -38,8 +38,8 @@ export const LOCAL_DB_FILE = "meta-brain.sqlite";
  * Bumped when SCHEMA changes shape. v2 and v3 files are migrated in place
  * (columns added, rows kept); anything older is refused.
  */
-const SCHEMA_VERSION = 4;
-const MIGRATABLE_VERSIONS = new Set([2, 3]);
+const SCHEMA_VERSION = 5;
+const MIGRATABLE_VERSIONS = new Set([2, 3, 4]);
 
 /** Ledger columns added in v3, applied to v2 files by ALTER TABLE. */
 const V3_LEDGER_COLUMNS: Array<[name: string, ddl: string]> = [
@@ -47,6 +47,20 @@ const V3_LEDGER_COLUMNS: Array<[name: string, ddl: string]> = [
   ["reasoning_tokens", "reasoning_tokens integer check (reasoning_tokens >= 0)"],
   ["usage_raw", "usage_raw text"],
 ];
+
+/** Booking columns added in v5: computed price, discount and idempotency key. */
+const V5_BOOKING_COLUMNS: Array<[name: string, ddl: string]> = [
+  ["price_cents", "price_cents integer"],
+  ["currency", "currency text"],
+  ["discount_id", "discount_id text"],
+  ["idempotency_key", "idempotency_key text"],
+];
+
+/** v5 indexes: one booking per key; one pending or confirmed booking per business and start time. */
+const V5_INDEXES = `
+create unique index if not exists bookings_idempotency_key on bookings (idempotency_key);
+create unique index if not exists bookings_active_slot on bookings (business_id, starts_at) where status in ('pending_approval', 'confirmed');
+`;
 
 /** Brain-version columns added in v4: where a draft came from. */
 const V4_BRAIN_COLUMNS: Array<[name: string, ddl: string]> = [
@@ -116,7 +130,11 @@ create table if not exists bookings (
   starts_at text not null,
   status text not null check (status in ('pending_approval', 'confirmed', 'rejected', 'cancelled')),
   approval_id text references approvals(id) on delete set null,
-  created_at text not null
+  created_at text not null,
+  price_cents integer,
+  currency text,
+  discount_id text,
+  idempotency_key text
 );
 create table if not exists model_spend_reservations (
   id text primary key,
@@ -321,9 +339,17 @@ export class LocalStore implements Storage {
     return (this.db.prepare("select * from turns where conversation_id = ? order by seq").all(conversationId) as Row[]).map(toTurn);
   }
 
-  async requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval }> {
+  async requestBooking(input: NewBookingRequest): Promise<{ booking: Booking; approval: PendingApproval; existing: boolean }> {
     return this.db
       .transaction(() => {
+        if (input.idempotencyKey) {
+          const prior = this.db.prepare("select * from bookings where idempotency_key = ?").get(input.idempotencyKey) as Row | undefined;
+          if (prior) {
+            const booking = toBooking(prior);
+            const approval = toApproval(this.db.prepare("select * from approvals where id = ?").get(prior.approval_id) as Row);
+            return { booking, approval, existing: true };
+          }
+        }
         const approval = this.insertApproval({
           businessId: input.businessId,
           conversationId: input.conversationId,
@@ -331,25 +357,37 @@ export class LocalStore implements Storage {
           payload: bookingPayload(input),
         });
         const id = randomUUID();
-        this.db
-          .prepare(
-            `insert into bookings (id, business_id, conversation_id, service_id, customer_ref, customer_name, customer_contact,
-                                   starts_at, status, approval_id, created_at)
-             values (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?)`,
-          )
-          .run(
-            id,
-            input.businessId,
-            input.conversationId,
-            input.serviceId,
-            input.customerRef,
-            input.customerName ?? null,
-            input.customerContact ?? null,
-            input.startsAt,
-            approval.id,
-            now(),
-          );
-        return { booking: toBooking(this.db.prepare("select * from bookings where id = ?").get(id) as Row), approval };
+        try {
+          this.db
+            .prepare(
+              `insert into bookings (id, business_id, conversation_id, service_id, customer_ref, customer_name, customer_contact,
+                                     starts_at, status, approval_id, created_at, price_cents, currency, discount_id, idempotency_key)
+               values (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              id,
+              input.businessId,
+              input.conversationId,
+              input.serviceId,
+              input.customerRef,
+              input.customerName ?? null,
+              input.customerContact ?? null,
+              input.startsAt,
+              approval.id,
+              now(),
+              input.priceCents ?? null,
+              input.currency ?? null,
+              input.discountId ?? null,
+              input.idempotencyKey ?? null,
+            );
+        } catch (err) {
+          // The transaction rolls back the approval too.
+          if ((err as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE" && /starts_at/.test((err as Error).message)) {
+            throw new SlotTakenError(input.startsAt);
+          }
+          throw err;
+        }
+        return { booking: toBooking(this.db.prepare("select * from bookings where id = ?").get(id) as Row), approval, existing: false };
       })
       .immediate();
   }
@@ -506,6 +544,7 @@ function prepare(db: Database.Database, file: string): Database.Database {
     db.exec(SCHEMA);
     migrateV2ToV3(db);
     migrateV3ToV4(db);
+    migrateV4ToV5(db);
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }).immediate();
   return db;
@@ -519,6 +558,13 @@ function addMissingColumns(db: Database.Database, table: string, columns: Array<
     db.exec(`alter table ${table} add column ${ddl}`);
     added.push(name);
   }
+  return added;
+}
+
+/** Adds the v5 booking columns and indexes that are missing; rows are untouched. Safe to run repeatedly. */
+export function migrateV4ToV5(db: Database.Database): string[] {
+  const added = addMissingColumns(db, "bookings", V5_BOOKING_COLUMNS);
+  db.exec(V5_INDEXES);
   return added;
 }
 
@@ -596,6 +642,10 @@ function toBooking(r: Row): Booking {
     status: r.status,
     approvalId: r.approval_id ?? null,
     createdAt: r.created_at,
+    priceCents: r.price_cents ?? null,
+    currency: r.currency ?? null,
+    discountId: r.discount_id ?? null,
+    idempotencyKey: r.idempotency_key ?? null,
   };
 }
 
