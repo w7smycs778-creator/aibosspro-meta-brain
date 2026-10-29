@@ -7,7 +7,15 @@ export type StorageBackend = "local" | "supabase";
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 
-export type Service = { id: string; name: string; durationMin: number; priceCents: number; currency: string };
+export type Service = {
+  id: string;
+  name: string;
+  durationMin: number;
+  priceCents: number;
+  currency: string;
+  /** The service's name in other languages, keyed by language code, e.g. { he: "תספורת וזקן" }. */
+  localNames?: Record<string, string>;
+};
 
 /** A percent or fixed amount off; empty serviceIds and weekdays mean every service and every day. */
 export type DiscountRule = {

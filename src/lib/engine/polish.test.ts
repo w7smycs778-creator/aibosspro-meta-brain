@@ -11,10 +11,13 @@ import { usdToNano } from "../gateway/money";
 import { LocalStore } from "../storage/local-store";
 import { SEED_BUSINESS_ID } from "../storage/seed";
 import { CEDAR_BRAIN } from "../storage/seed-cedar";
+import { upgradeBrain } from "../storage/brain";
 import { brainFacts } from "./brain-prompt";
 import { handleInbound } from "./conversation-service";
 import { DEMO_CLOCK } from "./demo-script";
-import { priceQuote } from "./tools";
+import { disclosureFor } from "./deps";
+import { availability, priceQuote, resolveService, type AvailabilityResult } from "./tools";
+import { verifyText, type Facts } from "./verifier";
 
 const TUESDAY = "2026-11-03";
 const WEDNESDAY = "2026-11-04";
@@ -119,5 +122,114 @@ describe("discounted price quote", () => {
     const system = client.calls[0].messages[0].content as string;
     expect(system).toContain("price.quote");
     expect(system).toContain("Never calculate a price yourself.");
+  });
+});
+
+describe("Hebrew", () => {
+  const TUE_AVAIL: AvailabilityResult = {
+    date: TUESDAY,
+    weekday: "tue",
+    service: { id: "cut_plus_beard", name: "Cut plus beard", durationMin: 50, priceCents: 12_000 },
+    price: priceQuote(CEDAR_BRAIN, CUT_BEARD, "tue"),
+    slots: [{ slot: `${TUESDAY}T10:00`, time: "10:00", startsAt: "2026-11-03T08:00:00.000Z" }],
+  };
+  const facts = (over: Partial<Facts> = {}): Facts => ({ brain: CEDAR_BRAIN, availability: TUE_AVAIL, bookings: [], ...over });
+  const failed = (text: string, f = facts()) => verifyText(text, f).checks.filter((c) => !c.pass);
+
+  it("the prompt names the languages and the Hebrew service names", () => {
+    const p = brainFacts(CEDAR_BRAIN, 1);
+    expect(p).toContain("Languages: English, Hebrew.");
+    expect(p).toContain("- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min");
+    expect(p).toContain("In Hebrew: use the Hebrew service names");
+    expect(brainFacts({ ...CEDAR_BRAIN, languages: ["en", "he"] }, 1)).toContain("Languages: English, Hebrew.");
+  });
+
+  it("verifier: a Hebrew price is bound to the Hebrew service name and its day", () => {
+    const ok = verifyText("ביום שלישי ב-10:00 יש מקום. תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120.", facts());
+    expect(ok.pass).toBe(true);
+    expect(ok.checks).toContainEqual(expect.objectContaining({ rule: "discount_condition", claim: "Cut plus beard ₪102 on tue", pass: true }));
+    expect(verifyText("תספורת קלאסית 80 ש״ח, סידור זקן 50 שקלים.", facts()).checks.filter((c) => c.rule === "service_price").map((c) => c.claim)).toEqual([
+      "Classic cut 80 ש״ח",
+      "Beard trim 50 שקלים",
+    ]);
+  });
+
+  it("verifier: wrong Hebrew prices, days, discounts, durations are blocked", () => {
+    expect(failed("תספורת וזקן ב-102 ש\"ח ביום רביעי.")).toEqual([expect.objectContaining({ rule: "discount_condition" })]);
+    expect(failed("בשלישי, תספורת וזקן ב-₪102.").length).toBe(0);
+    expect(failed("תספורת קלאסית ב-95 ש״ח.")).toEqual([expect.objectContaining({ rule: "price" })]);
+    expect(failed("תספורת קלאסית ב-₪120.")).toEqual([expect.objectContaining({ rule: "service_price" })]);
+    expect(failed("אפשר לתת לך 50 אחוז הנחה.")).toEqual([expect.objectContaining({ rule: "discount" })]);
+    expect(failed("יש לנו 15% הנחה ביום שלישי.").length).toBe(0);
+    expect(failed("תספורת וזקן לוקחת 45 דקות.")).toEqual([expect.objectContaining({ rule: "duration" })]);
+    expect(failed("תספורת וזקן לוקחת 50 דקות.").length).toBe(0);
+    expect(failed("יש מקום ב-11:15.")).toEqual([expect.objectContaining({ rule: "time" })]);
+  });
+
+  it("verifier: a Hebrew booking claim without a confirmed booking is blocked; negated or conditional passes", () => {
+    for (const claim of ["התור שלך אושר!", "מעולה, קבעתי לך ליום שלישי.", "התור נקבע.", "התור שלך שמור."]) {
+      expect(failed(claim), claim).toEqual([expect.objectContaining({ rule: "booking_claim" })]);
+    }
+    for (const ok of [
+      "שלחתי את הבקשה לבעל העסק. התור עדיין לא מאושר.",
+      "התור יהיה מאושר רק אחרי שבעל העסק יאשר.",
+      "כשבעל העסק יאשר, התור נקבע.",
+      "התור נקבע רק לאחר אישור בעל העסק.",
+    ]) {
+      expect(failed(ok), ok).toEqual([]);
+    }
+    const confirmedBooking = { status: "confirmed" } as Facts["bookings"][number];
+    expect(failed("התור שלך אושר!", facts({ bookings: [confirmedBooking] }))).toEqual([]);
+  });
+
+  it("verifier: a Hebrew promise to check later is a protocol leak", () => {
+    expect(failed("רגע, אבדוק ואחזור אליך.").map((c) => c.rule)).toEqual(["protocol_leak"]);
+    expect(failed("תן לי לבדוק את זה.").map((c) => c.rule)).toEqual(["protocol_leak"]);
+  });
+
+  it("services resolve by Hebrew name; local names survive a stored-brain upgrade", async () => {
+    expect(resolveService(CEDAR_BRAIN, "תספורת וזקן").id).toBe("cut_plus_beard");
+    expect(upgradeBrain(JSON.parse(JSON.stringify(CEDAR_BRAIN))).services[3].localNames).toEqual({ he: "תספורת וזקן" });
+  });
+
+  it("the AI disclosure follows the reply's script so Hebrew renders right to left", () => {
+    expect(disclosureFor("שלום")).toBe("[עוזר AI] ");
+    expect(disclosureFor("₪102 ביום שלישי")).toBe("[עוזר AI] ");
+    expect(disclosureFor("Hello")).toBe("[AI assistant] ");
+  });
+
+  it("a Hebrew conversation: services list, then a Tuesday slot with the discounted price", async () => {
+    const s = await cedarStore();
+    const list = "אנחנו מציעים: תספורת קלאסית ₪80 (30 דקות), סקין פייד ₪90 (40 דקות), סידור זקן ₪50 (20 דקות), תספורת וזקן ₪120 (50 דקות). בימי שלישי תספורת וזקן ב-15% הנחה.";
+    const slot = "כן, ביום שלישי ב-10:00 יש מקום. תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120. לשלוח בקשה לבעל העסק?";
+    const { client, deps: d } = deps(s, [final(list), call("check_availability", { date: TUESDAY, service: "cut_plus_beard" }), final(slot)]);
+
+    const r1 = await handleInbound(inbound("מה אתם מציעים?", "h1"), d);
+    expect(r1.replyText).toBe(`[עוזר AI] ${list}`);
+    const v1 = r1.trace.find((t) => t.checkpoint?.kind === "verifier")!.checkpoint!;
+    expect(v1.pass).toBe(true);
+    expect((v1.checks as Array<{ rule: string; claim: string }>).filter((c) => c.rule === "service_price").map((c) => c.claim)).toEqual([
+      "Classic cut ₪80", "Skin fade ₪90", "Beard trim ₪50", "Cut plus beard ₪120",
+    ]);
+
+    const r2 = await handleInbound(inbound("יש לכם ביום שלישי ב-10:00 תספורת וזקן?", "h2"), d);
+    expect(r2.replyText).toBe(`[עוזר AI] ${slot}`);
+    expect(r2.trace.filter((t) => t.checkpoint?.kind === "verifier").every((t) => t.checkpoint!.pass)).toBe(true);
+    expect(JSON.stringify(client.calls[0].messages[0])).toContain("Reply in the language of the customer's latest message");
+  });
+
+  it("a Hebrew customer handed to the owner gets the hand-off notice in Hebrew", async () => {
+    const s = await cedarStore();
+    const r = await handleInbound(inbound("שלום, אפשר לדבר עם מישהו?", "h3"), { store: s, gateway: null, gatewayError: "test", model: MOCK_MODEL, now: () => DEMO_CLOCK });
+    expect(r.outcome).toBe("model_unavailable");
+    expect(r.replyText).toBe("[עוזר AI] תודה, העברתי את זה לצוות ומישהו יחזור אליך בקרוב.");
+  });
+
+  it("availability for a Hebrew-named service on a Tuesday carries the code-computed discount", async () => {
+    const s = await cedarStore();
+    const ctx = { store: s, businessId: SEED_BUSINESS_ID, conversationId: "c", customerRef: "x", now: () => DEMO_CLOCK } as never;
+    const a = await availability(ctx, CEDAR_BRAIN, TUESDAY, resolveService(CEDAR_BRAIN, "תספורת וזקן"));
+    expect(a.price).toMatchObject({ priceCents: 10_200, listPriceCents: 12_000 });
+    expect(a.slots.some((x) => x.time === "10:00")).toBe(true);
   });
 });

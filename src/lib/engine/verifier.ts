@@ -3,7 +3,7 @@
 // reply against the approved brain's structured fields, the latest
 // availability result, and the conversation's bookings.
 import type { ToolCallRequest } from "../gateway/types";
-import type { Booking, BusinessBrain, Turn, Weekday } from "../storage/types";
+import type { Booking, BusinessBrain, Service, Turn, Weekday } from "../storage/types";
 import { discountedCents, ruleHoldsOn, rulesFor } from "./discounts";
 import type { AvailabilityResult } from "./tools";
 
@@ -27,6 +27,8 @@ export type Rule =
  */
 const LEAK_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:I'?ll|I will|let me|I'?m going to|I am going to)\s+(?:check|look up|look into|find out|verify|get back)\b/i, "promises a lookup instead of calling the tool"],
+  // Hebrew: "I'll check", "I'll find out", "I'll get back to you", "let me check".
+  [/(?<!\p{L})(?:אבדוק|אברר|אחזור אלי(?:ך|יך|כם)|(?:תן|תני|תנו) לי (?:לבדוק|לברר))(?!\p{L})/u, "promises a lookup instead of calling the tool"],
   [/\btool[ _]?calls?\b|\bschema\b|\bjson\b|\bformat requires\b|\bdeveloper\b/i, "talks about the tool protocol"],
   [/"type"\s*:|\{\s*"/, "contains a JSON fragment"],
 ];
@@ -58,8 +60,8 @@ export function latestAvailability(turns: Turn[]): AvailabilityResult | null {
   return null;
 }
 
-/** "$35", "₪120", "35 USD", "120 ₪", "120 NIS", "120 shekels". */
-const PRICE_RE = /([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?|ILS|NIS|shekels?|₪|€|£)(?![\p{L}\d])/giu;
+/** "$35", "₪120", "35 USD", "120 ₪", "120 NIS", "120 shekels", "120 ש״ח", "120 שקלים". */
+const PRICE_RE = /([$₪€£])\s?(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s?(?:USD|dollars?|ILS|NIS|shekels?|₪|€|£|ש["״]ח|שקלים|שקל)(?![\p{L}\d])/giu;
 
 /** Max gap between a service name and the price bound to it. */
 const BIND_WINDOW = 60;
@@ -67,6 +69,15 @@ const BIND_WINDOW = 60;
 const CLAIM_WINDOW = 40;
 const NEGATION_BEFORE = /\b(not|no|nothing|never|until|once|when|after|before|pending|awaiting|yet)\b|n't\b/i;
 const CONDITION_AFTER = /^\W*\b(until|once|after|when|by the owner|pending|yet)\b/i;
+/**
+ * Hebrew booking claims ("confirmed", "set", "I booked", "reserved"), with an
+ * optional ו/ה prefix. Hebrew letters are not \w, so whole words are bounded by \p{L}.
+ */
+const HE_CLAIM_RE = /(?<!\p{L})[וה]?(?:אושר|אושרה|מאושר|מאושרת|נקבע|נקבעה|קבעתי|שמרתי|שמור|שמורה|שריינתי|משוריין|משוריינת|הזמנתי)(?!\p{L})/gu;
+/** Not, not yet, still, waiting, after, when, until, if, only, will be approved; any word starting כש ("when"). */
+const HE_NEGATION_BEFORE =
+  /(?<!\p{L})(?:ו?(?:לא|טרם|עדיין|ממתין|ממתינה|ממתינים|מחכה|מחכים|בהמתנה|אחרי|לאחר|כאשר|ברגע|עד|אם|רק|יאשר|תאשר|שיאשר|שתאשר|יאושר|תאושר|שיאושר|שתאושר)|כש\p{L}*)(?!\p{L})/u;
+const HE_CONDITION_AFTER = /^[\s,:–-]*(?:עד|אחרי|לאחר|כש|ברגע|רק|בכפוף|ממתין|בהמתנה|לאישור)/u;
 
 function escape(re: string): string {
   return re.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -97,12 +108,20 @@ const DAY_NAMES: Record<string, Weekday> = {
 /** Full day names in any case (and plural); short names only capitalised, so "sat down" is not Saturday. */
 const DAY_RE = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b|\b(Mon|Tues?|Wed|Thu(?:rs?)?|Fri|Sat|Sun)\b/gi;
 
+const HE_DAYS: Record<string, Weekday> = { ראשון: "sun", שני: "mon", שלישי: "tue", רביעי: "wed", חמישי: "thu", שישי: "fri", שבת: "sat" };
+/**
+ * "יום שלישי", "ביום שלישי", "בימי שלישי", "בשלישי", "בשבת". Bare ראשון/שני
+ * also mean first/second, so those two count only after יום/ימי.
+ */
+const HE_DAY_RE = /(?<!\p{L})(?:ו?[בלה]?(?:יום|ימי)\s+(ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|ו?ב?(שלישי|רביעי|חמישי|שישי|שבת))(?!\p{L})/gu;
+
 function dayMentions(text: string): Array<{ day: Weekday; index: number }> {
   const out: Array<{ day: Weekday; index: number }> = [];
   for (const m of text.matchAll(DAY_RE)) {
     if (m[1]) out.push({ day: DAY_NAMES[m[1].toLowerCase()], index: m.index! });
     else if (/^[A-Z]/.test(m[2])) out.push({ day: DAY_NAMES[m[2]], index: m.index! });
   }
+  for (const m of text.matchAll(HE_DAY_RE)) out.push({ day: HE_DAYS[m[1] ?? m[2]], index: m.index! });
   return out;
 }
 
@@ -137,10 +156,15 @@ function dayContext(text: string, index: number, facts: Facts): Weekday | null {
   return null;
 }
 
-/** "Kids cut (under 12)" -> ["Kids cut (under 12)", "Kids cut"]: the name, and the name without a trailing bracketed qualifier. */
-function nameForms(name: string): string[] {
+/**
+ * "Kids cut (under 12)" -> ["Kids cut (under 12)", "Kids cut"]: the name, the
+ * name without a trailing bracketed qualifier, and its local-language names.
+ */
+function nameForms(service: Service): string[] {
+  const { name } = service;
   const stripped = name.replace(/\s*\([^)]*\)\s*$/, "").trim();
-  return stripped && stripped !== name ? [name, stripped] : [name];
+  const forms = stripped && stripped !== name ? [name, stripped] : [name];
+  return [...forms, ...Object.values(service.localNames ?? {}).filter((n) => n.trim())];
 }
 
 type Span = { start: number; end: number };
@@ -149,7 +173,7 @@ type Span = { start: number; end: number };
 function nameSpans(text: string, brain: BusinessBrain): Array<Span & { id: string }> {
   const spans: Array<Span & { id: string }> = [];
   for (const s of brain.services) {
-    for (const form of nameForms(s.name)) {
+    for (const form of nameForms(s)) {
       for (const m of text.matchAll(new RegExp(escape(form), "gi"))) spans.push({ id: s.id, start: m.index!, end: m.index! + m[0].length });
     }
   }
@@ -236,7 +260,7 @@ export function verifyText(text: string, facts: Facts): Verdict {
     });
   });
 
-  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?%/g)) {
+  for (const m of text.matchAll(/(\d+(?:\.\d+)?)\s?(?:%|אחוזים|אחוז(?!\p{L}))/gu)) {
     const rules = brain.discounts.filter((d) => d.percentOff === Number(m[1]));
     if (rules.length === 0) {
       checks.push({ rule: "discount", claim: m[0], pass: false, detail: `no ${m[0]} discount in the approved brain` });
@@ -254,9 +278,10 @@ export function verifyText(text: string, facts: Facts): Verdict {
   }
 
   const durations = new Set(brain.services.map((s) => s.durationMin));
-  for (const m of text.matchAll(/\b(\d+)\s?(?:min|mins|minutes)\b/gi)) {
-    const ok = durations.has(Number(m[1]));
-    checks.push({ rule: "duration", claim: m[0], pass: ok, ...(!ok && { detail: `no service lasts ${m[1]} minutes` }) });
+  for (const m of text.matchAll(/\b(\d+)\s?(?:min|mins|minutes)\b|\b(\d+)\s?(?:דקות|דקה|דק['׳])/giu)) {
+    const n = m[1] ?? m[2];
+    const ok = durations.has(Number(n));
+    checks.push({ rule: "duration", claim: m[0], pass: ok, ...(!ok && { detail: `no service lasts ${n} minutes` }) });
   }
 
   // A time must be an opening or closing time, or a slot from the latest availability result.
@@ -278,10 +303,14 @@ export function verifyText(text: string, facts: Facts): Verdict {
   }
 
   const confirmed = facts.bookings.some((b) => b.status === "confirmed");
-  for (const m of text.matchAll(/\b(confirmed|booked|reserved|all set)\b/gi)) {
+  const claims = [
+    ...[...text.matchAll(/\b(confirmed|booked|reserved|all set)\b/gi)].map((m) => ({ m, negation: NEGATION_BEFORE, condition: CONDITION_AFTER })),
+    ...[...text.matchAll(HE_CLAIM_RE)].map((m) => ({ m, negation: HE_NEGATION_BEFORE, condition: HE_CONDITION_AFTER })),
+  ];
+  for (const { m, negation, condition } of claims) {
     const before = text.slice(Math.max(0, m.index! - CLAIM_WINDOW), m.index!);
     const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 30);
-    if (NEGATION_BEFORE.test(before) || CONDITION_AFTER.test(after)) {
+    if (negation.test(before) || condition.test(after)) {
       checks.push({ rule: "booking_claim", claim: m[0], pass: true, detail: "negated or conditional" });
       continue;
     }

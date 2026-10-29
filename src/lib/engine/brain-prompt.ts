@@ -6,6 +6,17 @@ import type { BusinessBrain, Weekday } from "../storage/types";
 const SYMBOLS: Record<string, string> = { USD: "$", ILS: "₪", EUR: "€", GBP: "£" };
 const DAY_NAMES: Record<Weekday, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const DAY_ORDER: Weekday[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const LANGUAGE_NAMES: Record<string, string> = { en: "English", he: "Hebrew", iw: "Hebrew", ar: "Arabic", ru: "Russian", fr: "French", es: "Spanish" };
+
+/** "he" -> "Hebrew"; names pass through. */
+export function languageName(lang: string): string {
+  return LANGUAGE_NAMES[lang.trim().toLowerCase()] ?? lang.trim();
+}
+
+function localNamesText(names: Record<string, string> | undefined): string {
+  const entries = Object.entries(names ?? {});
+  return entries.length ? ` (${entries.map(([lang, n]) => `${languageName(lang)}: ${n}`).join("; ")})` : "";
+}
 
 export function formatMoney(cents: number, currency: string): string {
   const amount = (cents / 100).toFixed(2).replace(/\.00$/, "");
@@ -18,7 +29,7 @@ export function brainFacts(brain: BusinessBrain, version: number): string {
   const lines = [
     `Business facts (owner-approved, brain v${version}). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.`,
     "Services:",
-    ...brain.services.map((s) => `- ${s.name}: ${formatMoney(s.priceCents, s.currency || brain.currency)}, ${s.durationMin} min (id ${s.id})`),
+    ...brain.services.map((s) => `- ${s.name}${localNamesText(s.localNames)}: ${formatMoney(s.priceCents, s.currency || brain.currency)}, ${s.durationMin} min (id ${s.id})`),
     `Opening hours (${brain.timezone}):`,
     ...DAY_ORDER.map((d) => `- ${DAY_NAMES[d]}: ${brain.hours[d].length ? brain.hours[d].map(([o, c]) => `${o}-${c}`).join(", ") : "closed"}`),
     "Discounts:",
@@ -36,7 +47,10 @@ export function brainFacts(brain: BusinessBrain, version: number): string {
         })
       : ["- none; offer no discount"]),
     "Booking policy: every booking needs the owner's approval.",
-    `Languages: ${brain.languages.join(", ") || "English"}. Reply in the customer's language when it is one of these.`,
+    `Languages: ${brain.languages.map(languageName).join(", ") || "English"}. Reply in the language of the customer's latest message when it is one of these, otherwise in ${languageName(brain.languages[0] ?? "English")}.`,
+    ...(brain.languages.some((l) => languageName(l) === "Hebrew")
+      ? ["In Hebrew: use the Hebrew service names listed above, write prices as ₪ with digits (₪102), times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת."]
+      : []),
     ...(brain.tone.adjectives.length ? [`Tone: ${brain.tone.adjectives.join(", ")}.${brain.tone.example ? ` Example: "${brain.tone.example}"` : ""}`] : []),
     ...(brain.doNotSay.length ? [`Never say: ${brain.doNotSay.join("; ")}.`] : []),
   ];

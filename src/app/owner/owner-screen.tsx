@@ -166,7 +166,11 @@ export function OwnerScreen() {
                     ))}
                   </span>
                 </div>
-                {c.lastCustomerMessage && <p className="mt-1 truncate text-gray-500">Last: {c.lastCustomerMessage}</p>}
+                {c.lastCustomerMessage && (
+                  <p className="mt-1 truncate text-gray-500">
+                    Last: <bdi>{c.lastCustomerMessage}</bdi>
+                  </p>
+                )}
                 <form
                   className="mt-2 flex gap-2"
                   onSubmit={(e) => {
@@ -208,7 +212,8 @@ export function OwnerScreen() {
           {messages.map((m, i) => (
             <div key={i} className={m.who === "customer" ? "text-right" : ""}>
               <div
-                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded px-3 py-2 text-left ${
+                dir="auto"
+                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded px-3 py-2 text-start ${
                   m.who === "customer" ? "bg-blue-600 text-white" : m.who === "owner" ? "bg-amber-100" : "bg-gray-100"
                 }`}
               >
@@ -228,6 +233,7 @@ export function OwnerScreen() {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            dir="auto"
             placeholder="Write as the customer"
             className="flex-1 rounded border px-2 py-1"
           />

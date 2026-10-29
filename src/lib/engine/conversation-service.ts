@@ -5,7 +5,16 @@ import { runToolLoop, type ProposedStep, type ToolLoopResult } from "../gateway/
 import type { ChatMessage } from "../gateway/types";
 import { SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
-import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
+import {
+  ENGINE_MAX_OUTPUT_TOKENS,
+  ENGINE_REASONING_EFFORT,
+  OWNER_HELP_REPLY,
+  OWNER_HELP_REPLY_HE,
+  disclosureFor,
+  engineDeps,
+  startsHebrew,
+  type EngineDeps,
+} from "./deps";
 import { brainFacts } from "./brain-prompt";
 import { channelDeliver, deliverAndRecord } from "./delivery";
 import { resumeConversation } from "./resume";
@@ -122,14 +131,16 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       now: d.now,
     });
     outcome = result.status;
-    if (result.status === "final") replyText = AI_DISCLOSURE + result.text;
+    if (result.status === "final") replyText = disclosureFor(result.text) + result.text;
   }
   if (outcome === "owner_help" || outcome === "model_unavailable") {
-    replyText = AI_DISCLOSURE + OWNER_HELP_REPLY;
+    // The customer wrote in Hebrew: the hand-off notice is in Hebrew too.
+    const helpReply = startsHebrew(input.text) ? OWNER_HELP_REPLY_HE : OWNER_HELP_REPLY;
+    replyText = disclosureFor(helpReply) + helpReply;
     await store.appendTurn({
       conversationId: conversation.id,
       role: "assistant",
-      content: OWNER_HELP_REPLY,
+      content: helpReply,
       checkpoint: { turnId: customerTurn.id, kind: "owner_help_reply" },
     });
   }

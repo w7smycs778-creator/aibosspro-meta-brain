@@ -42,10 +42,11 @@ async function approvedBrain(ctx: ToolContext): Promise<BusinessBrain> {
   return v.brain;
 }
 
-/** Matches a service by id, or by name ignoring case. */
+/** Matches a service by id, or by name (or a local-language name) ignoring case. */
 export function resolveService(brain: BusinessBrain, ref: string): Service {
   const key = ref.trim().toLowerCase();
-  const s = brain.services.find((x) => x.id === ref || x.name.toLowerCase() === key);
+  const names = (x: Service) => [x.name, ...Object.values(x.localNames ?? {})].map((n) => n.trim().toLowerCase());
+  const s = brain.services.find((x) => x.id === ref || names(x).includes(key));
   if (!s) throw new Error(`unknown service "${ref}"; use an id from list_services`);
   return s;
 }
