@@ -1,6 +1,8 @@
 // Pure display helpers shared by the owner screen, the onboarding page and
 // their API data. No Node imports: client components use this module too.
 
+import { formatWhenIn, type Lang } from "./i18n";
+
 type SourceLike = { kind: string; text: string | null } | null;
 
 /** Label and text for the box beside a brain draft. */
@@ -10,7 +12,7 @@ export function sourceBox(version: number, source: SourceLike): { label: string;
 }
 
 /** Israel has no Intl short name in en-US; everything else uses Intl's short name. */
-function zoneAbbreviation(instant: Date, tz: string): string {
+export function zoneAbbreviation(instant: Date, tz: string): string {
   const offset = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" })
     .formatToParts(instant)
     .find((p) => p.type === "timeZoneName")?.value;
@@ -22,9 +24,14 @@ function zoneAbbreviation(instant: Date, tz: string): string {
   );
 }
 
-/** e.g. "Thu, Oct 29, 16:00 IST": wall-clock time in tz with the zone abbreviation. */
-export function formatWithZone(instant: Date | string, tz: string): string {
+/**
+ * e.g. "Thu, Oct 29, 16:00 IST": wall-clock time in tz with the zone abbreviation.
+ * Other languages: e.g. "יום שלישי, 3 בנובמבר בשעה 10:00", "miércoles, 4 de noviembre, 10:00 EST";
+ * the abbreviation only outside Israel.
+ */
+export function formatWithZone(instant: Date | string, tz: string, lang: Lang = "en"): string {
   const d = new Date(instant);
+  if (lang !== "en") return formatWhenIn(d, tz, lang, zoneAbbreviation(d, tz));
   const wall = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",

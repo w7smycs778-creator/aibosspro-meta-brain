@@ -5,9 +5,19 @@ import { getStore } from "../storage";
 import type { Storage } from "../storage/types";
 import { DEMO_SCRIPT } from "./demo-script";
 import type { Deliver } from "./delivery";
+import { detectLanguage, STRINGS, type Lang } from "./i18n";
 
-export const AI_DISCLOSURE = "[AI assistant] ";
-export const OWNER_HELP_REPLY = "Thanks, I've passed this to the team and someone will get back to you shortly.";
+export const AI_DISCLOSURE = STRINGS.en.disclosure;
+export const OWNER_HELP_REPLY = STRINGS.en.ownerHelp;
+
+/**
+ * The AI disclosure in the reply's language (fallback: the business's first
+ * language). A Latin-script prefix on a Hebrew reply would make the whole
+ * message render left to right in the panel and on WhatsApp.
+ */
+export function disclosureFor(reply: string, fallback: Lang = "en"): string {
+  return STRINGS[detectLanguage(reply, fallback)].disclosure;
+}
 /** Spark counts reasoning inside max_completion_tokens; 1,024 ran out before the JSON on 2026-10-29. */
 export const ENGINE_MAX_OUTPUT_TOKENS = 2_048;
 export const ENGINE_REASONING_EFFORT = "low" as const;

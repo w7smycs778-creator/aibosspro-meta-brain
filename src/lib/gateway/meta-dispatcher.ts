@@ -33,15 +33,21 @@ export class MetaDispatcher implements Dispatcher {
     await assertLiveInferenceAllowed(this.env, this.ledgerStore);
   }
 
+  /** Why dispatch would refuse for lack of configuration (base URL, key), or null. Never returns the key. */
+  static configError(env: Env): string | null {
+    const baseUrl = env.MODEL_API_BASE_URL?.replace(/\/+$/, "");
+    if (!baseUrl || !baseUrl.startsWith("https://")) return "MODEL_API_BASE_URL is missing or not https";
+    if (!env.MODEL_API_KEY) return "MODEL_API_KEY is not set";
+    return null;
+  }
+
   async dispatch(call: ModelCall): Promise<DispatchResult> {
     // Read at call time so the guard cannot be bypassed by early construction.
     if (this.env.LIVE_CREDITS_VERIFIED !== "true") throw new LiveCreditsNotVerifiedError();
-    const baseUrl = this.env.MODEL_API_BASE_URL?.replace(/\/+$/, "");
-    if (!baseUrl || !baseUrl.startsWith("https://")) {
-      throw new PreDispatchError("dispatcher_not_configured", "MODEL_API_BASE_URL is missing or not https");
-    }
-    const key = this.env.MODEL_API_KEY;
-    if (!key) throw new PreDispatchError("dispatcher_not_configured", "MODEL_API_KEY is not set");
+    const configError = MetaDispatcher.configError(this.env);
+    if (configError) throw new PreDispatchError("dispatcher_not_configured", configError);
+    const baseUrl = this.env.MODEL_API_BASE_URL!.replace(/\/+$/, "");
+    const key = this.env.MODEL_API_KEY!;
 
     const auth = { Authorization: `Bearer ${key}` };
     switch (call.kind) {

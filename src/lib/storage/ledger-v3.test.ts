@@ -19,6 +19,18 @@ import { LOCAL_DB_FILE, LocalStore, migrateV2ToV3 } from "./local-store";
 import { SEED_BUSINESS_ID } from "./seed";
 
 const REAL_DB = join(process.cwd(), "data", LOCAL_DB_FILE);
+
+function realSpendRows(): number {
+  if (!existsSync(REAL_DB)) return 0;
+  const db = new Database(REAL_DB, { readonly: true });
+  try {
+    return (db.prepare("select count(*) as n from model_spend_reservations").get() as { n: number }).n;
+  } catch {
+    return 0;
+  } finally {
+    db.close();
+  }
+}
 const V3_COLUMNS = ["finish_reason", "reasoning_tokens", "usage_raw"];
 
 const dirs: string[] = [];
@@ -70,7 +82,8 @@ const chatResponse = (content: string, finish = "stop") =>
   );
 
 describe("v2 -> v3 ledger migration", () => {
-  it.skipIf(!existsSync(REAL_DB))("migrates a copy of the current ./data file, keeping every spend row", async () => {
+  // Only on a checkout whose ./data holds real history; a fresh clone seeded by npm run judge has an empty ledger.
+  it.skipIf(realSpendRows() < 5)("migrates a copy of the current ./data file, keeping every spend row", async () => {
     const source = new Database(REAL_DB, { readonly: true });
     const before = source.prepare("select id, model, tokens_in, tokens_out, reserved_nano, settled_nano, state from model_spend_reservations order by id").all();
     const dir = tempDir();

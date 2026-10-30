@@ -7,7 +7,15 @@ export type StorageBackend = "local" | "supabase";
 
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 
-export type Service = { id: string; name: string; durationMin: number; priceCents: number; currency: string };
+export type Service = {
+  id: string;
+  name: string;
+  durationMin: number;
+  priceCents: number;
+  currency: string;
+  /** The service's name in other languages, keyed by language code, e.g. { he: "תספורת וזקן" }. */
+  localNames?: Record<string, string>;
+};
 
 /** A percent or fixed amount off; empty serviceIds and weekdays mean every service and every day. */
 export type DiscountRule = {
@@ -238,9 +246,14 @@ export interface Storage extends SpendLedgerStore {
    * processed-event ids are kept: wiping them would reset the cap and replay
    * events.
    */
-  reset(): Promise<{ businessId: string }>;
+  /** Wipes business data (the spend ledger and processed events stay) and seeds the demo business with seed (default SEED_BRAIN) as approved v1. */
+  reset(seed?: BusinessBrain): Promise<{ businessId: string }>;
 
   getBusiness(id: string): Promise<Business | null>;
+  /** Every business, oldest first. */
+  listBusinesses(): Promise<Business[]>;
+  /** Creates the business when it does not exist (whatsappDefaultMode only applies then); returns it either way. */
+  ensureBusiness(input: { id: string; name: string; whatsappDefaultMode?: ConversationMode }): Promise<Business>;
   updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business>;
   /** Stores the next version, unapproved. */
   addBrainVersion(businessId: string, brain: BusinessBrain, source?: BrainSource): Promise<BrainVersion>;

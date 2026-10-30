@@ -13,6 +13,8 @@ type OwnerState = {
   conversations?: Array<{ id: string; channel: string; externalId: string; mode: Mode; state: string; lastCustomerMessage: string | null }>;
   approvals?: Array<{ id: string; conversationId: string | null; booking: null | { serviceName: string; when: string; customerName: string | null; customerContact: string | null } }>;
   bookings?: Array<{ id: string; serviceName: string; when: string; status: string; customerName: string | null }>;
+  inference?: { live: boolean; reason: string | null };
+  businesses?: Array<{ id: string; name: string }>;
 };
 type PanelMessage = { who: "customer" | "assistant" | "owner"; text: string; outcome?: string; trace?: Turn[] };
 
@@ -35,15 +37,31 @@ export function OwnerScreen() {
   const [draft, setDraft] = useState("");
   const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  // The business on screen; kept in ?business= so a reload or a shared link opens the same one.
+  const [businessId, setBusinessId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBusinessId(new URLSearchParams(window.location.search).get("business") ?? "");
+  }, []);
 
   const refresh = useCallback(async () => {
-    setState(await (await fetch("/api/owner/state")).json());
-  }, []);
+    if (businessId === null) return;
+    setState(await (await fetch(`/api/owner/state${businessId ? `?business=${encodeURIComponent(businessId)}` : ""}`)).json());
+  }, [businessId]);
 
   useEffect(() => {
     setSessionId(`panel-${crypto.randomUUID()}`);
+    setPanelConversationId(null);
+    setMessages([]);
     void refresh();
   }, [refresh]);
+
+  function switchBusiness(id: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("business", id);
+    window.history.replaceState(null, "", url);
+    setBusinessId(id);
+  }
 
   async function send() {
     const text = draft.trim();
@@ -52,7 +70,7 @@ export function OwnerScreen() {
     setDraft("");
     setMessages((m) => [...m, { who: "customer", text }]);
     try {
-      const r = await post("/api/panel/message", { sessionId, eventId: crypto.randomUUID(), text });
+      const r = await post("/api/panel/message", { sessionId, eventId: crypto.randomUUID(), text, ...(businessId && { businessId }) });
       if (r.conversationId) setPanelConversationId(r.conversationId);
       setMessages((m) => [
         ...m,
@@ -98,10 +116,36 @@ export function OwnerScreen() {
 
   return (
     <main className="grid min-h-screen grid-cols-1 gap-4 bg-gray-50 p-4 text-sm text-gray-900 lg:grid-cols-2">
+      {state?.inference && !state.inference.live && (
+        <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 lg:col-span-2">
+          <strong>Live inference is off:</strong> {state.inference.reason}. Customer messages are handed to the owner and no model is called. See
+          README, &quot;Spend safety&quot;.
+        </div>
+      )}
       <section className="space-y-4">
         <div className="rounded border bg-white p-3">
           <div className="flex items-center justify-between">
-            <h1 className="text-lg font-semibold">{state?.business ? state.businessName ?? state.business.name : "No business yet"}</h1>
+            <h1 className="text-lg font-semibold">
+              {state?.businesses && state.businesses.length > 1 ? (
+                <select
+                  aria-label="Business"
+                  dir="auto"
+                  className="rounded border px-1 py-0.5"
+                  value={state.business?.id ?? ""}
+                  onChange={(e) => switchBusiness(e.target.value)}
+                >
+                  {state.businesses.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              ) : state?.business ? (
+                (state.businessName ?? state.business.name)
+              ) : (
+                "No business yet"
+              )}
+            </h1>
             <span className="space-x-2">
               <a href="/onboard" className="rounded border px-2 py-1 hover:bg-gray-100">
                 Onboarding / brain review
@@ -166,7 +210,11 @@ export function OwnerScreen() {
                     ))}
                   </span>
                 </div>
-                {c.lastCustomerMessage && <p className="mt-1 truncate text-gray-500">Last: {c.lastCustomerMessage}</p>}
+                {c.lastCustomerMessage && (
+                  <p className="mt-1 truncate text-gray-500">
+                    Last: <bdi>{c.lastCustomerMessage}</bdi>
+                  </p>
+                )}
                 <form
                   className="mt-2 flex gap-2"
                   onSubmit={(e) => {
@@ -187,7 +235,7 @@ export function OwnerScreen() {
           </ul>
         </div>
 
-        <ContentSection />
+        <ContentSection businessId={state?.business?.id ?? null} />
 
         <div className="rounded border bg-white p-3">
           <h2 className="mb-2 font-semibold">Bookings</h2>
@@ -208,7 +256,8 @@ export function OwnerScreen() {
           {messages.map((m, i) => (
             <div key={i} className={m.who === "customer" ? "text-right" : ""}>
               <div
-                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded px-3 py-2 text-left ${
+                dir="auto"
+                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded px-3 py-2 text-start ${
                   m.who === "customer" ? "bg-blue-600 text-white" : m.who === "owner" ? "bg-amber-100" : "bg-gray-100"
                 }`}
               >
@@ -228,6 +277,7 @@ export function OwnerScreen() {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            dir="auto"
             placeholder="Write as the customer"
             className="flex-1 rounded border px-2 py-1"
           />

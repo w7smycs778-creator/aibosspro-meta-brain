@@ -18,7 +18,7 @@ type Creative = {
 
 const media = (id: string, file: string) => `/api/content/${id}/media/${file}`;
 
-export function ContentSection() {
+export function ContentSection({ businessId }: { businessId: string | null }) {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [creatives, setCreatives] = useState<Creative[]>([]);
   const [offerId, setOfferId] = useState("");
@@ -29,11 +29,12 @@ export function ContentSection() {
   const [captions, setCaptions] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
-    const r = await (await fetch("/api/content")).json();
+    if (!businessId) return;
+    const r = await (await fetch(`/api/content?business=${encodeURIComponent(businessId)}`)).json();
     setOffers(r.offers ?? []);
     setCreatives(r.creatives ?? []);
-    setOfferId((cur) => cur || r.offers?.[0]?.id || "");
-  }, []);
+    setOfferId((cur) => (r.offers ?? []).some((o: Offer) => o.id === cur) ? cur : r.offers?.[0]?.id || "");
+  }, [businessId]);
 
   useEffect(() => {
     void refresh();
@@ -48,6 +49,7 @@ export function ContentSection() {
       form.append("photo", photo);
       form.append("offerId", offerId);
       form.append("object", object);
+      if (businessId) form.append("businessId", businessId);
       const res = await fetch("/api/content", { method: "POST", body: form });
       const r = await res.json();
       setStatus(res.ok ? "Creative ready for approval." : `Error: ${r.error}`);

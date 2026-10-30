@@ -60,7 +60,7 @@ const AVAIL: AvailabilityResult = {
   date: DEMO_DATE,
   weekday: "thu",
   service: { id: "cut_and_beard", name: "Cut + beard", durationMin: 45, priceCents: 5000 },
-  price: { priceCents: 5000, currency: "USD", discountId: null },
+  price: { priceCents: 5000, currency: "USD", discountId: null, listPriceCents: 5000, quote: "Cut + beard is $50", quotes: {} },
   slots: [{ slot: `${DEMO_DATE}T10:00`, time: "10:00", startsAt: "2026-11-05T08:00:00.000Z" }],
 };
 const facts = (over: Partial<Facts> = {}): Facts => ({ brain: SEED_BRAIN, availability: AVAIL, bookings: [], ...over });

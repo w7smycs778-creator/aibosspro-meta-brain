@@ -24,6 +24,7 @@ export { runToolLoop } from "./tool-loop";
 export type { ToolLoopInput, ToolLoopResult, OwnerHelpReason, ProposedStep, StepVerdict } from "./tool-loop";
 export { permittedToolNames } from "./tools";
 export { assertLiveInferenceAllowed } from "./live-gate";
+export { liveInferenceStatus } from "./inference-status";
 export type { ToolSpec, ToolContext } from "./tools";
 export type * from "./types";
 

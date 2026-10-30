@@ -2,6 +2,7 @@
 import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage, Turn } from "../storage/types";
 import { channelDeliver, deliverAndRecord, type Deliver, type DeliveryResult } from "./delivery";
 import { formatWithZone } from "./display";
+import { brainLangs, detectLanguage, serviceName, STRINGS } from "./i18n";
 
 export type Decision = "approved" | "rejected";
 
@@ -28,13 +29,13 @@ export async function decideBooking(store: Storage, approvalId: string, decision
 
   const versions = await store.listBrainVersions(approval.businessId);
   const current = versions.find((v) => v.approved)!.brain;
-  const service =
-    brainAt(versions, booking.createdAt)?.brain.services.find((s) => s.id === booking.serviceId)?.name ?? booking.serviceId;
-  const when = formatWithZone(booking.startsAt, current.timezone);
-  const replyText =
-    decision === "approved"
-      ? `Good news: your ${service} on ${when} is confirmed. See you then.`
-      : `Sorry, the ${service} on ${when} isn't available after all. Would you like me to check another time?`;
+  const booked = brainAt(versions, booking.createdAt)?.brain.services.find((s) => s.id === booking.serviceId);
+  // The reply follows the customer's language (their last message), else the business's first language.
+  const lastCustomer = (await store.listTurns(conversation.id)).filter((t) => t.role === "customer").at(-1);
+  const lang = detectLanguage(lastCustomer?.content ?? "", brainLangs(current)[0]);
+  const service = booked ? serviceName(booked, lang) : booking.serviceId;
+  const when = formatWithZone(booking.startsAt, current.timezone, lang);
+  const replyText = decision === "approved" ? STRINGS[lang].approved(service, when) : STRINGS[lang].rejected(service, when);
   const turn = await store.appendTurn({
     conversationId: conversation.id,
     role: "assistant",

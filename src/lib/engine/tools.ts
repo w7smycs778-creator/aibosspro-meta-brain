@@ -3,20 +3,35 @@
 // booking and the owner approval that gates it.
 import type { ToolContext, ToolSpec } from "../gateway/tools";
 import { SlotTakenError } from "../storage/errors";
+import { formatMoney } from "./brain-prompt";
 import { priceOn } from "./discounts";
-import type { BusinessBrain, Service } from "../storage/types";
+import { brainLangs, dayName, serviceName, STRINGS, type Lang } from "./i18n";
+import type { BusinessBrain, Service, Weekday } from "../storage/types";
 import { formatLocal, hhmm, localDate, localToUtc, minutes, weekdayOf } from "./time";
 
 export const SLOT_STEP_MIN = 30;
 
 export type Slot = { slot: string; time: string; startsAt: string };
 
+/** What the customer is told about the price on this date, computed here so the model never does price arithmetic. */
+export type PriceQuote = {
+  priceCents: number;
+  currency: string;
+  discountId: string | null;
+  /** The service's list price; differs from priceCents only when a discount applies. */
+  listPriceCents: number;
+  /** In the brain's first language, e.g. "Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)". */
+  quote: string;
+  /** The same quote in each of the brain's languages, keyed by language code. */
+  quotes: Partial<Record<Lang, string>>;
+};
+
 export type AvailabilityResult = {
   date: string;
   weekday: string;
   service: { id: string; name: string; durationMin: number; priceCents: number };
   /** The price on this date: the list price, or the discounted price when a rule's conditions hold. */
-  price: { priceCents: number; currency: string; discountId: string | null };
+  price: PriceQuote;
   slots: Slot[];
 };
 
@@ -26,12 +41,31 @@ async function approvedBrain(ctx: ToolContext): Promise<BusinessBrain> {
   return v.brain;
 }
 
-/** Matches a service by id, or by name ignoring case. */
+/** Matches a service by id, or by name (or a local-language name) ignoring case. */
 export function resolveService(brain: BusinessBrain, ref: string): Service {
   const key = ref.trim().toLowerCase();
-  const s = brain.services.find((x) => x.id === ref || x.name.toLowerCase() === key);
+  const names = (x: Service) => [x.name, ...Object.values(x.localNames ?? {})].map((n) => n.trim().toLowerCase());
+  const s = brain.services.find((x) => x.id === ref || names(x).includes(key));
   if (!s) throw new Error(`unknown service "${ref}"; use an id from list_services`);
   return s;
+}
+
+export function priceQuote(brain: BusinessBrain, service: Service, weekday: Weekday): PriceQuote {
+  const { priceCents, discountId } = priceOn(brain, service, weekday);
+  const currency = service.currency || brain.currency;
+  const rule = discountId ? brain.discounts.find((d) => d.id === discountId) : undefined;
+  const price = formatMoney(priceCents, currency);
+  const normal = formatMoney(service.priceCents, currency);
+  const langs = brainLangs(brain);
+  const quotes: Partial<Record<Lang, string>> = {};
+  for (const lang of langs) {
+    const name = serviceName(service, lang);
+    const t = STRINGS[lang];
+    // The rule's description is in the owner's words, so only the first language's quote carries it.
+    const why = rule && lang === langs[0] ? ` (${rule.description})` : "";
+    quotes[lang] = rule ? `${t.quote(name, price, dayName(weekday, lang), normal)}${why}` : t.plainQuote(name, price);
+  }
+  return { priceCents, currency, discountId, listPriceCents: service.priceCents, quote: quotes[langs[0]]!, quotes };
 }
 
 /** Open slots for service on date: weekly hours minus pending and confirmed bookings, future only. */
@@ -62,7 +96,7 @@ export async function availability(ctx: ToolContext, brain: BusinessBrain, date:
     date,
     weekday,
     service: { id: service.id, name: service.name, durationMin: service.durationMin, priceCents: service.priceCents },
-    price: { ...priceOn(brain, service, weekday), currency: service.currency || brain.currency },
+    price: priceQuote(brain, service, weekday),
     slots,
   };
 }
@@ -91,7 +125,8 @@ export const getHoursTool: ToolSpec = {
 
 export const checkAvailabilityTool: ToolSpec = {
   name: "check_availability",
-  description: "Open start times for one service on one date. Offer customers only times returned here.",
+  description:
+    "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
   parameters: {
     type: "object",
     properties: {

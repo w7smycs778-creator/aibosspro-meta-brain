@@ -12,6 +12,7 @@ export function upgradeBrain(raw: any): BusinessBrain {
     durationMin: s.durationMin,
     priceCents: s.priceCents,
     currency: s.currency ?? currency,
+    ...(s.localNames && { localNames: s.localNames }),
   }));
   const discounts: DiscountRule[] = (raw?.discounts ?? []).map((d: any) => ({
     id: d.id,

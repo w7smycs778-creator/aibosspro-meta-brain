@@ -3,9 +3,10 @@
 // tool loop behind the verifier, persist every step, return the reply.
 import { runToolLoop, type ProposedStep, type ToolLoopResult } from "../gateway/tool-loop";
 import type { ChatMessage } from "../gateway/types";
-import { SEED_BUSINESS_ID } from "../storage/seed";
+import { isDemoBusiness } from "../storage/seed-demo";
 import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
-import { AI_DISCLOSURE, ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, OWNER_HELP_REPLY, engineDeps, type EngineDeps } from "./deps";
+import { ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, disclosureFor, engineDeps, type EngineDeps } from "./deps";
+import { brainLangs, detectLanguage, STRINGS } from "./i18n";
 import { brainFacts } from "./brain-prompt";
 import { channelDeliver, deliverAndRecord } from "./delivery";
 import { resumeConversation } from "./resume";
@@ -41,12 +42,12 @@ const HISTORY_TURNS = 20;
 const REPLY_KINDS = new Set(["final", "owner_help_reply", "owner_decision"]);
 
 /**
- * Panel conversations on the seeded demo business start in AUTO; WhatsApp
+ * Panel conversations on a demo business start in AUTO; WhatsApp
  * conversations use the business's whatsappDefaultMode; anything else uses the store default.
  */
 async function initialMode(store: Storage, input: InboundInput): Promise<ConversationMode | undefined> {
   if (input.channel === "whatsapp") return (await store.getBusiness(input.businessId))?.whatsappDefaultMode;
-  return input.channel === "panel" && input.businessId === SEED_BUSINESS_ID ? "AUTO" : undefined;
+  return input.channel === "panel" && isDemoBusiness(input.businessId) ? "AUTO" : undefined;
 }
 
 /** Why the engine must stop for this turn, or null: the mode left AUTO, or the owner wrote after the customer. */
@@ -68,6 +69,7 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
   }
   const brainVersion = await store.getBrain(input.businessId, { approvedOnly: true });
   if (!brainVersion) throw new Error(`business ${input.businessId} has no approved brain; run store:reset`);
+  const primary = brainLangs(brainVersion.brain)[0];
 
   const conversation =
     (await store.findConversation(input.businessId, input.channel, input.externalConversationId)) ??
@@ -122,14 +124,17 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
       now: d.now,
     });
     outcome = result.status;
-    if (result.status === "final") replyText = AI_DISCLOSURE + result.text;
+    if (result.status === "final") replyText = disclosureFor(result.text, primary) + result.text;
   }
   if (outcome === "owner_help" || outcome === "model_unavailable") {
-    replyText = AI_DISCLOSURE + OWNER_HELP_REPLY;
+    // The hand-off notice is in the customer's language.
+    const lang = detectLanguage(input.text, primary);
+    const helpReply = STRINGS[lang].ownerHelp;
+    replyText = STRINGS[lang].disclosure + helpReply;
     await store.appendTurn({
       conversationId: conversation.id,
       role: "assistant",
-      content: OWNER_HELP_REPLY,
+      content: helpReply,
       checkpoint: { turnId: customerTurn.id, kind: "owner_help_reply" },
     });
   }
@@ -202,6 +207,7 @@ export function buildMessages(brain: BusinessBrain, version: number, history: Tu
     brainFacts(brain, version),
     "Never invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.",
     "Offer only start times returned by check_availability. Request a booking only for a slot it returned.",
+    "When you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.",
     "A booking is never confirmed by you: request_booking creates a pending request that the owner approves.",
     "If the customer needs anything the tools cannot do, call request_owner_help.",
     "Call the tool directly; never say you will check something.",
