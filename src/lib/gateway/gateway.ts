@@ -128,6 +128,7 @@ export class SpendGateway {
           protocolError: result.protocolError,
           finishReason: result.finishReason,
           errorBody: result.errorBody?.slice(0, ERROR_BODY_LIMIT),
+          ...(result.responseHeaders && { responseHeaders: result.responseHeaders }),
           attempts,
           reservedNano: sum(attempts, "reservedNano"),
           settledNano: sum(attempts, "settledNano"),

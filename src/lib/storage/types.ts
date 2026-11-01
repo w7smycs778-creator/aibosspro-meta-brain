@@ -71,8 +71,13 @@ export type Creative = {
   caption: string;
   /** Verifier log for the caption (attempts, checks, final verdict). */
   captionLog: Record<string, unknown> | null;
-  /** Absolute local paths under ./data/media/. */
-  media: { original: string; cutout: string | null; scene: string | null; feed: string; story: string };
+  /**
+   * Media refs: absolute paths under ./data/media/ (local store) or
+   * "supabase://<bucket>/<id>/<file>" (hosted). sceneOriginal is the Muse Image
+   * output as returned; manifest records what was received and preserved.
+   * Both are absent on creatives made before 2026-11-01.
+   */
+  media: { original: string; cutout: string | null; scene: string | null; feed: string; story: string; sceneOriginal?: string | null; manifest?: string | null };
   cutoutKind: "mask" | "box" | "unavailable";
   sceneKind: "generated" | "flat";
   /** Model output shapes and fallback reasons, for review. */

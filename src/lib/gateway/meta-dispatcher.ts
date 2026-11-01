@@ -15,6 +15,8 @@ import type { BillingUnits, ChatCall, DispatchResult, Dispatcher, Env, ModelCall
 
 type FetchFn = typeof fetch;
 
+/** Chat answers a waiting customer, so it gives up early; media and transcription may take longer. */
+export const CHAT_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 120_000;
 
 /** The raw chat usage object is logged once per process so its real keys are on record. */
@@ -123,6 +125,7 @@ export class MetaDispatcher implements Dispatcher {
         : mode === "native"
           ? { ...base, ...encodeNative(call.messages, call.tools!) }
           : { ...base, messages: call.messages };
+    // Customer turns (tool calls) answer a waiting customer; extraction and captions keep the long timeout.
     return this.json(url, auth, payload, (body) => {
       const choice = body?.choices?.[0];
       const message = choice?.message;
@@ -148,16 +151,28 @@ export class MetaDispatcher implements Dispatcher {
       return step.ok
         ? { output: step.text, toolCalls: step.toolCalls, ...meta }
         : { output: content, protocolError: step.error, ...meta };
-    });
+    }, call.tools ? CHAT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
   }
 
-  private json(url: string, auth: Record<string, string>, payload: unknown, parse: Parser): Promise<DispatchResult> {
-    return this.send(url, { ...auth, "Content-Type": "application/json" }, JSON.stringify(payload), parse);
+  private json(url: string, auth: Record<string, string>, payload: unknown, parse: Parser, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DispatchResult> {
+    return this.send(url, { ...auth, "Content-Type": "application/json" }, JSON.stringify(payload), parse, timeoutMs);
   }
 
-  private async send(url: string, headers: Record<string, string>, body: BodyInit, parse: Parser): Promise<DispatchResult> {
-    const res = await this.fetchFn(url, { method: "POST", headers, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    const text = await res.text();
+  private async send(url: string, headers: Record<string, string>, body: BodyInit, parse: Parser, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DispatchResult> {
+    let res: Response;
+    let text: string;
+    try {
+      res = await this.fetchFn(url, { method: "POST", headers, body, signal: AbortSignal.timeout(timeoutMs) });
+      text = await res.text();
+    } catch (err) {
+      // A timed-out request may have reached the provider: billed at the reservation, and not
+      // retried, so a waiting customer is handed to the owner after one timeout, not three.
+      if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") {
+        return { ok: false, status: 0, retryable: false, units: null, errorBody: `timeout after ${timeoutMs} ms` };
+      }
+      throw err;
+    }
+    const responseHeaders = headersOf(res);
     if (!res.ok) {
       return {
         ok: false,
@@ -166,17 +181,27 @@ export class MetaDispatcher implements Dispatcher {
         // A rejected request reports no units; the gateway settles it at the reservation.
         units: null,
         errorBody: text.slice(0, ERROR_BODY_LIMIT),
+        responseHeaders,
       };
     }
     let parsed: any;
     try {
       parsed = JSON.parse(text);
     } catch {
-      return { ok: false, status: res.status, retryable: false, units: null, errorBody: `non-JSON body: ${text.slice(0, ERROR_BODY_LIMIT)}` };
+      return { ok: false, status: res.status, retryable: false, units: null, errorBody: `non-JSON body: ${text.slice(0, ERROR_BODY_LIMIT)}`, responseHeaders };
     }
     const { output, units, toolCalls, protocolError, finishReason, usageRaw } = parse(parsed);
-    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError, finishReason, usageRaw };
+    return { ok: true, status: res.status, retryable: false, units, output, toolCalls, protocolError, finishReason, usageRaw, responseHeaders };
   }
+}
+
+/** Response headers, lower-case, without cookies. */
+function headersOf(res: Response): Record<string, string> {
+  const out: Record<string, string> = {};
+  res.headers?.forEach?.((value, name) => {
+    if (name.toLowerCase() !== "set-cookie") out[name.toLowerCase()] = value;
+  });
+  return out;
 }
 
 type Parser = (body: any) => {
