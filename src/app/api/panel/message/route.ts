@@ -9,7 +9,7 @@ const MAX_TEXT = 2_000;
 
 /** Customer panel message: { sessionId, eventId, text, businessId? } (default: the original demo business). */
 export async function POST(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const body = await readJson(req);
   const { sessionId, eventId, text } = body ?? {};

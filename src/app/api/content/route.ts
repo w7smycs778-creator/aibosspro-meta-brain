@@ -11,7 +11,7 @@ const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
 /** Offers from the business's current approved brain, and its creatives, newest first. ?business=<id>. */
 export async function GET(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const store = await getStore();
   const businessId = await resolveBusiness(store, new URL(req.url).searchParams.get("business"));
@@ -22,7 +22,7 @@ export async function GET(req: Request): Promise<Response> {
 
 /** Multipart: photo (jpg/png), offerId, object (what to cut out), businessId (optional). */
 export async function POST(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const form = await req.formData().catch(() => null);
   const photo = form?.get("photo");

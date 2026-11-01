@@ -10,7 +10,7 @@ const MAX_TEXT = 8_000;
 
 /** { text, sourceKind: "voice" | "text", audioPath? } -> a new DRAFT brain version. */
 export async function POST(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const body = await readJson(req);
   const text = body?.text;

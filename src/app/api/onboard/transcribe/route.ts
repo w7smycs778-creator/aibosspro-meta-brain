@@ -12,7 +12,7 @@ const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 
 /** Multipart field "audio": a mono 16-bit 16 kHz WAV (the page converts recordings and uploads). */
 export async function POST(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const form = await req.formData().catch(() => null);
   const file = form?.get("audio");

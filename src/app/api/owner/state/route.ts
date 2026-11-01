@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /** ?business=<id> selects the business (default: the original demo business). */
 export async function GET(req: Request): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const store = await getStore();
   const businessId = await resolveBusiness(store, new URL(req.url).searchParams.get("business"));

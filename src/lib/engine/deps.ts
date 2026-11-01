@@ -74,7 +74,7 @@ function liveRun(env: Env): { run?: { id: string; capNano: number }; maxCalls?: 
   return { run: { id, capNano: usdToNano(capUsd) }, maxCalls };
 }
 
-/** The owner screen and its APIs have no auth yet, so they run locally only. */
+/** Not a hosted deploy. Owner access on Vercel needs OWNER_ACCESS_TOKEN (owner-access.ts). */
 export function ownerScreenAllowed(env: Env = process.env): boolean {
   return !env.VERCEL;
 }

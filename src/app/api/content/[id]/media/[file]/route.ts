@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
 const FILES = { "original.jpg": "original", "cutout.png": "cutout", "scene.png": "scene", "feed.png": "feed", "story.png": "story" } as const;
 
 /** Serves a creative's images from the paths recorded on it, only inside ./data/media/. */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string; file: string }> }): Promise<Response> {
-  const blocked = ownerOnly();
+export async function GET(req: Request, { params }: { params: Promise<{ id: string; file: string }> }): Promise<Response> {
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const { id, file } = await params;
   const key = FILES[file as keyof typeof FILES];

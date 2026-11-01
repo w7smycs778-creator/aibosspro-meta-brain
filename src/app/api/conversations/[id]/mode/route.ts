@@ -10,7 +10,7 @@ const MODES: ConversationMode[] = ["AUTO", "HUMAN", "PAUSED"];
 
 /** Owner switch: { mode: "AUTO" | "HUMAN" | "PAUSED" }. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const { id } = await params;
   const mode = (await readJson(req))?.mode;

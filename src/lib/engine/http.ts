@@ -1,9 +1,15 @@
 import type { Storage } from "../storage/types";
 import { SEED_BUSINESS_ID } from "../storage/seed";
 import { ownerScreenAllowed } from "./deps";
+import { requestAllowed } from "./owner-access";
 
-/** 404 on a hosted deploy: the owner screen and its APIs have no auth yet. */
-export function ownerOnly(): Response | null {
+/** 404 on a hosted deploy unless the request carries owner access (cookie or bearer). */
+export function ownerOnly(req: Request): Response | null {
+  return requestAllowed(req) ? null : new Response("Not Found", { status: 404 });
+}
+
+/** 404 on a hosted deploy, owner access or not: destructive local tools (demo reset). */
+export function localOnly(): Response | null {
   return ownerScreenAllowed() ? null : new Response("Not Found", { status: 404 });
 }
 

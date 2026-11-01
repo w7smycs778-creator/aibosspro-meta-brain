@@ -9,7 +9,7 @@ const MAX_TEXT = 2_000;
 
 /** The owner writes to the customer: { text }. Switches the conversation to HUMAN. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const { id } = await params;
   const text = (await readJson(req))?.text;
