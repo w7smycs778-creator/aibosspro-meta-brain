@@ -619,6 +619,10 @@ export class LocalStore implements Storage {
     return res.changes === 1;
   }
 
+  async releaseEvent(source: string, eventId: string): Promise<void> {
+    this.db.prepare("delete from processed_events where source = ? and event_id = ?").run(source, eventId);
+  }
+
   private brainRow(businessId: string, version: number): BrainVersion | null {
     const r = this.db.prepare("select * from brain_versions where business_id = ? and version = ?").get(businessId, version) as
       | Row

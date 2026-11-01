@@ -161,6 +161,28 @@ describe("POST events", () => {
     }));
   });
 
+  it("a message whose processing threw before it was recorded is processed again on redelivery", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    engine.handleInbound.mockRejectedValueOnce(Object.assign(new Error("business b has no approved brain"), { retryable: true }));
+    const body = textEvent("wamid.retry");
+    await post(body);
+    await flush();
+    await post(body);
+    await flush();
+    expect(engine.handleInbound).toHaveBeenCalledTimes(2);
+  });
+
+  it("a message that failed after it was recorded is not processed twice", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    engine.handleInbound.mockRejectedValueOnce(new Error("storage hiccup after the customer turn"));
+    const body = textEvent("wamid.noretry");
+    await post(body);
+    await flush();
+    await post(body);
+    await flush();
+    expect(engine.handleInbound).toHaveBeenCalledTimes(1);
+  });
+
   it("sends nothing when the engine has no reply", async () => {
     engine.handleInbound.mockResolvedValue({ replyText: null, outcome: "not_active" });
     expect((await post(textEvent("wamid.p4"))).status).toBe(200);

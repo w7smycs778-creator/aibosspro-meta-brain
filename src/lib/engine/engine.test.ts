@@ -345,3 +345,20 @@ describe("tool protocol", () => {
     expect(r.toolCalls).toEqual([{ id: "t1", name: "get_hours", arguments: {} }]);
   });
 });
+
+describe("inbound dedupe releases a message that failed before it was recorded", () => {
+  it("a throw before the customer turn is stored leaves the event retryable; the retry is processed once", async () => {
+    const s = store();
+    const { deps: d } = deps(s, [final("Hello from the engine.")]);
+    // No approved brain yet: handleInbound throws before recording anything.
+    await expect(handleInbound(inbound("hi", "evt-retry"), d)).rejects.toMatchObject({ retryable: true });
+    expect(await s.listConversations(SEED_BUSINESS_ID)).toEqual([]);
+    await s.reset(SEED_BRAIN);
+    const r = await handleInbound(inbound("hi", "evt-retry"), d);
+    expect(r).toMatchObject({ duplicate: false, outcome: "final" });
+    const again = await handleInbound(inbound("hi", "evt-retry"), d);
+    expect(again.duplicate).toBe(true);
+    const turns = await s.listTurns(r.conversationId!);
+    expect(turns.filter((t) => t.role === "customer")).toHaveLength(1);
+  });
+});

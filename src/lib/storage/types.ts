@@ -315,4 +315,6 @@ export interface Storage extends SpendLedgerStore {
 
   /** Records an event id; true the first time, false on every repeat. */
   claimEvent(source: string, eventId: string): Promise<boolean>;
+  /** Undoes a claim, so a message whose processing failed before anything was recorded can be processed again. */
+  releaseEvent(source: string, eventId: string): Promise<void>;
 }
