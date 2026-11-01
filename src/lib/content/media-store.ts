@@ -123,6 +123,14 @@ export class SupabaseMediaStore implements MediaStore {
   }
 }
 
+/**
+ * Where onboarding voice notes go: the private bucket when hosted, else the
+ * local data directory. Refs are under audio/<businessId>/ in both.
+ */
+export function audioStoreFor(backend: StorageBackend, env: Env = process.env): MediaStore {
+  return backend === "supabase" ? SupabaseMediaStore.fromEnv(env) : new FsMediaStore(resolve(env.STORAGE_DIR?.trim() || DEFAULT_LOCAL_DIR));
+}
+
 /** The media store for a storage backend: disk locally, Supabase Storage when hosted. */
 export function mediaStoreFor(backend: StorageBackend, opts: { mediaDir?: string; env?: Env } = {}): MediaStore {
   return backend === "supabase" ? SupabaseMediaStore.fromEnv(opts.env) : new FsMediaStore(opts.mediaDir ?? mediaRoot(opts.env));
@@ -133,5 +141,6 @@ export function contentTypeOf(file: string): string {
   if (file.endsWith(".jpg") || file.endsWith(".jpeg")) return "image/jpeg";
   if (file.endsWith(".webp")) return "image/webp";
   if (file.endsWith(".json")) return "application/json";
+  if (file.endsWith(".wav")) return "audio/wav";
   return "application/octet-stream";
 }

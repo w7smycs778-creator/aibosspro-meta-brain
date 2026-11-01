@@ -34,6 +34,18 @@ export function errorResponse(err: unknown): Response {
 }
 
 /**
+ * The business an onboarding or brain request is about, required: the
+ * ?business= query, else a body or form field. 400 when missing, 404 when
+ * unknown; never a fallback to another business.
+ */
+export async function requireBusiness(store: Storage, req: Request, field?: unknown): Promise<string | Response> {
+  const raw = new URL(req.url).searchParams.get("business") ?? (typeof field === "string" ? field : null);
+  const id = raw?.trim();
+  if (!id) return json({ error: "business is required (?business=<id>)" }, 400);
+  return (await store.getBusiness(id)) ? id : json({ error: `unknown business ${id}` }, 404);
+}
+
+/**
  * The business an owner-screen request is about: the given id (query
  * ?business= or a body field), else the original demo business. A 404
  * response when no such business exists.

@@ -1,5 +1,6 @@
 // Day 3 cleanup: transcript display, place-name time zones, owner header and
 // booking display. Mock model client and stub dispatchers only.
+import { FsMediaStore } from "../content/media-store";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,7 +99,7 @@ describe("transcript on audio drafts", () => {
     [..."data"].forEach((c, i) => v.setUint8(36 + i, c.charCodeAt(0)));
     v.setUint32(40, 32_000, true);
 
-    const t = await transcribeVoiceNote(d, { businessId: SEED_BUSINESS_ID, wav, audioDir: join(tempDir(), "audio") });
+    const t = await transcribeVoiceNote(d, { businessId: SEED_BUSINESS_ID, wav, media: new FsMediaStore(tempDir()) });
     await extractBrainDraft(d, { businessId: SEED_BUSINESS_ID, text: t.transcript, source: { kind: "voice", audioPath: t.audioPath } });
 
     const [draft] = await store.listBrainVersions(SEED_BUSINESS_ID);

@@ -4,10 +4,9 @@
 // approved versions reach the engine. Every model call goes through the
 // gateway, so each one writes a ledger row under the hard cap.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { WEEKDAY_KEYS } from "../storage/brain";
 import type { BrainSource, BrainVersion, BusinessBrain, DiscountRule, Service, Storage, Weekday } from "../storage/types";
+import { audioStoreFor, type MediaStore } from "../content/media-store";
 import { ENGINE_REASONING_EFFORT, type EngineDeps } from "./deps";
 import { langCode, langName, SUPPORTED_LANGS, type Lang } from "./i18n";
 
@@ -64,16 +63,21 @@ export async function transcribeLanguages(store: Storage, businessId: string): P
   return (declared.length ? declared : SUPPORTED_LANGS).map(langName);
 }
 
-/** Saves the voice note under audioDir, transcribes it, returns the transcript and the stored path. */
+/**
+ * Stores the voice note (bucket when hosted, ./data locally; under
+ * audio/<businessId>/), then transcribes it. The note is stored before the
+ * call, so a failed transcription still keeps it. Returns the transcript and
+ * the note's ref.
+ */
 export async function transcribeVoiceNote(
   deps: EngineDeps,
-  input: { businessId: string; wav: Uint8Array; audioDir: string },
+  input: { businessId: string; wav: Uint8Array; media?: MediaStore },
 ): Promise<{ transcript: string; audioPath: string; durationMs: number }> {
   const info = parseWav(input.wav);
   if (!deps.gateway) throw new OnboardingError(`model unavailable: ${deps.gatewayError ?? "no gateway"}`, 503);
-  mkdirSync(input.audioDir, { recursive: true });
-  const audioPath = resolve(join(input.audioDir, `${deps.now().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.wav`));
-  writeFileSync(audioPath, input.wav);
+  const media = input.media ?? audioStoreFor(deps.store.backend);
+  const audioPath = media.ref(`audio/${input.businessId}`, `${deps.now().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.wav`);
+  await media.put(audioPath, Buffer.from(input.wav), "audio/wav");
   const r = await deps.gateway.call({
     kind: "transcribe",
     model: TRANSCRIBE_MODEL,

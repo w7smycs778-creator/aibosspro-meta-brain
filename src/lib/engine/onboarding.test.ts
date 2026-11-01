@@ -17,6 +17,7 @@ import { DEMO_BUSINESSES } from "../storage/seed-demo";
 import { handleInbound } from "./conversation-service";
 import { DEMO_CLOCK } from "./demo-script";
 import type { EngineDeps } from "./deps";
+import { FsMediaStore } from "../content/media-store";
 import { approveDraft, discardDraft, extractBrainDraft, OnboardingError, parseWav, saveDraftEdits, transcribeVoiceNote, TRANSCRIBE_MODEL } from "./onboarding";
 
 const dirs: string[] = [];
@@ -209,11 +210,11 @@ describe("voice onboarding", () => {
     const store = await seeded();
     const stub = voiceStub();
     const d = deps(store, stub);
-    const audioDir = join(tempDir(), "audio");
-    const t = await transcribeVoiceNote(d, { businessId: SEED_BUSINESS_ID, wav: wav(32_000), audioDir });
+    const dataDir = tempDir();
+    const t = await transcribeVoiceNote(d, { businessId: SEED_BUSINESS_ID, wav: wav(32_000), media: new FsMediaStore(dataDir) });
 
     expect(t).toMatchObject({ transcript: TYPED, durationMs: 2_000 });
-    expect(t.audioPath.startsWith(audioDir)).toBe(true);
+    expect(t.audioPath.startsWith(join(dataDir, "audio", SEED_BUSINESS_ID))).toBe(true);
     expect(readFileSync(t.audioPath).byteLength).toBe(44 + 64_000);
     expect(stub.calls[0]).toMatchObject({ kind: "transcribe", model: TRANSCRIBE_MODEL, languageBias: ["English", "Hebrew"] });
 
@@ -230,7 +231,7 @@ describe("voice onboarding", () => {
     await store.ensureBusiness({ id, name: brain.name });
     await store.approveBrainVersion(id, (await store.addBrainVersion(id, brain)).version);
     const stub = voiceStub();
-    await transcribeVoiceNote(deps(store, stub), { businessId: id, wav: wav(16_000), audioDir: join(tempDir(), "audio") });
+    await transcribeVoiceNote(deps(store, stub), { businessId: id, wav: wav(16_000), media: new FsMediaStore(tempDir()) });
     expect(stub.calls[0]).toMatchObject({ kind: "transcribe", languageBias: ["Spanish", "English"] });
   });
 
@@ -241,7 +242,7 @@ describe("voice onboarding", () => {
     await store.approveBrainVersion("biz_y", (await store.addBrainVersion("biz_y", { ...SEED_BRAIN, languages: ["Klingon"] })).version);
     const stub = voiceStub();
     for (const businessId of ["biz_x", "biz_y"]) {
-      await transcribeVoiceNote(deps(store, stub), { businessId, wav: wav(16_000), audioDir: join(tempDir(), "audio") });
+      await transcribeVoiceNote(deps(store, stub), { businessId, wav: wav(16_000), media: new FsMediaStore(tempDir()) });
     }
     expect(stub.calls.map((c) => (c as { languageBias?: string[] }).languageBias)).toEqual([
       ["English", "Hebrew", "Spanish", "French"],
@@ -255,17 +256,19 @@ describe("voice onboarding", () => {
     const storageDir = tempDir();
     vi.stubEnv("STORAGE_DIR", storageDir);
     vi.doMock("@/lib/engine/deps", async (orig) => ({ ...(await orig<typeof import("./deps")>()), engineDeps: async () => deps(store, stub) }));
+    vi.doMock("@/lib/storage", async (orig) => ({ ...(await orig<typeof import("../storage")>()), getStore: async () => store }));
     const { POST } = await import("@/app/api/onboard/transcribe/route");
     const form = new FormData();
     form.append("audio", new Blob([wav(16_000) as BlobPart], { type: "audio/wav" }), "note.wav");
-    const res = await POST(new Request("http://local/api/onboard/transcribe", { method: "POST", body: form }));
+    const res = await POST(new Request(`http://local/api/onboard/transcribe?business=${SEED_BUSINESS_ID}`, { method: "POST", body: form }));
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.transcript).toBe(TYPED);
-    expect(body.audioPath.startsWith(join(storageDir, "audio"))).toBe(true);
+    expect(body.audioPath.startsWith(join(storageDir, "audio", SEED_BUSINESS_ID))).toBe(true);
     expect(existsSync(body.audioPath)).toBe(true);
     expect(stub.calls.map((c) => c.kind)).toEqual(["transcribe"]);
     vi.doUnmock("@/lib/engine/deps");
+    vi.doUnmock("@/lib/storage");
     vi.unstubAllEnvs();
   });
 
