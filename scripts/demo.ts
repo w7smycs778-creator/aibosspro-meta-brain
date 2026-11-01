@@ -15,6 +15,12 @@ import { formatUsd } from "../src/lib/gateway";
 import { toolMode } from "../src/lib/gateway/tool-protocol";
 import { DEMO_BUSINESSES } from "../src/lib/storage/seed-demo";
 
+// Dependencies need Node ^20.19 or >=22.12; say so plainly instead of failing somewhere deeper.
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (!(major > 22 || (major === 22 && minor >= 12) || (major === 20 && minor >= 19))) {
+  console.error(`Node 22.12+ or 20.19+ is required (found ${process.version}). With nvm, in this directory: nvm install && nvm use`);
+  process.exit(1);
+}
 // These modules read the environment only when called, so loading .env here is in time.
 if (existsSync(".env")) process.loadEnvFile(".env");
 process.env.STORAGE_BACKEND = "local";
