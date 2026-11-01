@@ -335,3 +335,52 @@ describe("replies follow the customer's language", () => {
     }
   });
 });
+
+describe("health businesses stay administrative", () => {
+  const f = factsFor(PHYSIO_BRAIN, avail(PHYSIO_BRAIN, "therapeutic_massage", TUESDAY, "tue"));
+  const cedar = factsFor(CEDAR_BRAIN, null);
+
+  it("the physio brain is a health business with diagnosis, treatment and exercise advice in doNotSay, and the prompt says so", () => {
+    expect(PHYSIO_BRAIN.category).toBe("health");
+    expect(PHYSIO_BRAIN.doNotSay.join(" ")).toMatch(/diagnos/i);
+    expect(PHYSIO_BRAIN.doNotSay.join(" ")).toMatch(/treatment|traitement/i);
+    expect(PHYSIO_BRAIN.doNotSay.join(" ")).toMatch(/exercise|exercice/i);
+    const facts = brainFacts(PHYSIO_BRAIN, 1);
+    expect(facts).toMatch(/administrative only/i);
+    expect(brainFacts(CEDAR_BRAIN, 1)).not.toMatch(/administrative only/i);
+  });
+
+  it("blocks diagnostic or treatment advice in French and English", () => {
+    for (const advice of [
+      "Ça ressemble à une tendinite de l'épaule.",
+      "Vous avez probablement une entorse.",
+      "Je vous recommande de faire ces étirements chaque matin.",
+      "Appliquez de la glace 20 minutes et prenez de l'ibuprofène.",
+      "Vous devriez vous reposer et éviter de courir.",
+      "It sounds like sciatica.",
+      "You probably have a sprained ankle.",
+      "Try these stretches for your lower back pain.",
+      "You should ice it and take ibuprofen.",
+      "I recommend resting the knee for a week.",
+    ]) {
+      expect(failed(advice, f).map((c) => c.rule), advice).toContain("medical_advice");
+    }
+  });
+
+  it("administrative replies, service names and referrals pass", () => {
+    for (const ok of [
+      "Le Traitement de physiothérapie dure 40 min et coûte 88 $ CA.",
+      "Pour un avis sur votre douleur, le physiothérapeute vous verra lors de l'Évaluation en physiothérapie.",
+      "A Physiotherapy assessment is 60 minutes; the physiotherapist will look at your shoulder then.",
+      "Mardi à 10h, c'est libre.",
+      "Je ne peux pas poser de diagnostic par message; le physiothérapeute vous verra en rendez-vous.",
+      "I can't give a diagnosis by message, but I can book you a Physiotherapy assessment.",
+    ]) {
+      expect(failed(ok, f), ok).toEqual([]);
+    }
+  });
+
+  it("the rule applies only to health businesses", () => {
+    expect(failed("You should try these stretches before your cut.", cedar).map((c) => c.rule)).not.toContain("medical_advice");
+  });
+});

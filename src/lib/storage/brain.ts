@@ -35,5 +35,6 @@ export function upgradeBrain(raw: any): BusinessBrain {
     discounts,
     bookingPolicy: { approvalRequired: true },
     doNotSay: raw?.doNotSay ?? [],
+    ...(raw?.category === "health" && { category: "health" as const }),
   };
 }

@@ -9,6 +9,7 @@ import type { AvailabilityResult } from "./tools";
 
 export type Rule =
   | "price"
+  | "medical_advice"
   | "service_price"
   | "discount"
   | "discount_condition"
@@ -102,6 +103,26 @@ const FR_CONDITION_AFTER = /^[\s,:–-]*(?:quand|lorsque|lorsqu'|d[èe]s qu(?:e|
 
 /** "No problem"-style interjections: their "no"/"pas" negates nothing that follows. */
 const NOT_A_NEGATION = /(?<!\p{L})(?:no (?:hay )?problema|no problem|no worries|no te preocupes|pas de (?:probl[èe]me|souci)|no(?=\s*[,!]))(?!\p{L})/giu;
+
+/**
+ * Diagnostic or treatment advice, English and French. Checked only for health
+ * businesses; service names ("Physiotherapy treatment") are not advice. Bounded:
+ * phrasings outside these patterns are not caught.
+ */
+const CONDITIONS = "tendinit\\w*|tendinopath\\w*|entorse|foulure|hernie\\w*|sciatique|lombalgie|arthrose|bursite|sprain\\w*|strain|sciatica|hernia|herniated disc|tendonitis|bursitis|arthritis";
+const MEDICAL_ADVICE: RegExp[] = [
+  new RegExp(`(?<!\\p{L})(?:ça|cela) (?:ressemble|semble être|fait penser) à (?:une? |de l'|des )?(?:${CONDITIONS})`, "iu"),
+  new RegExp(`(?<!\\p{L})vous (?:avez|souffrez) (?:probablement|sûrement|sans doute|peut-être)? ?(?:d'|de |une? |des )?(?:${CONDITIONS})`, "iu"),
+  /(?<!\p{L})(?:je vous (?:recommande|conseille)|vous devriez|il faudrait|essayez de)\s+(?:de\s+)?(?:faire|prendre|appliquer|mettre|vous (?:étirer|reposer)|reposer|éviter|masser|glacer)/iu,
+  /(?<!\p{L})(?:faites|essayez) (?:ces|des|quelques) (?:exercices|étirements)/iu,
+  /(?<!\p{L})(?:appliquez|mettez) (?:de la )?(?:glace|chaleur)/iu,
+  /(?<!\p{L})prenez (?:de l'|du |des )?(?:ibuprofène|paracétamol|advil|tylenol|anti-inflammatoires?|antidouleurs?)/iu,
+  new RegExp(`\\b(?:it|this|that) (?:sounds|looks|seems) like (?:a |an )?(?:${CONDITIONS})`, "i"),
+  new RegExp(`\\byou (?:probably|likely|may|might|must)? ?have (?:a |an )?(?:\\w+ )?(?:${CONDITIONS})`, "i"),
+  /\b(?:try|do) (?:these|some|this) (?:stretch(?:es)?|exercises?)\b/i,
+  /\b(?:you should|I (?:would )?(?:recommend|suggest|advise))\s+(?:you\s+)?(?:ice|icing|rest|resting|stretch|stretching|take|taking|apply|applying|avoid|avoiding|massage|elevate)\b/i,
+  /\b(?:take|try) (?:some )?(?:ibuprofen|paracetamol|acetaminophen|advil|tylenol|painkillers?|anti-inflammator\w*)\b/i,
+];
 
 function escape(re: string): string {
   return re.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -246,6 +267,12 @@ export function verifyText(text: string, facts: Facts): Verdict {
   for (const [re, detail] of LEAK_PATTERNS) {
     const m = text.match(re);
     if (m) checks.push({ rule: "protocol_leak", claim: m[0], pass: false, detail: `reply ${detail}; call the tool directly` });
+  }
+  if (brain.category === "health") {
+    for (const re of MEDICAL_ADVICE) {
+      const m = text.match(re);
+      if (m) checks.push({ rule: "medical_advice", claim: m[0], pass: false, detail: "health business: administrative replies only; the practitioner assesses at an appointment" });
+    }
   }
   const byService = pricesByService(brain);
   // A fixed discount amount ("$5 off") may also be quoted on its own.

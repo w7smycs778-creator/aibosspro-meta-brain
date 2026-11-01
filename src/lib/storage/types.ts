@@ -47,6 +47,8 @@ export type BusinessBrain = {
   bookingPolicy: { approvalRequired: true };
   /** Phrases or topics the assistant must not use. */
   doNotSay: string[];
+  /** "health": the assistant stays administrative (no diagnosis, treatment or exercise advice). */
+  category?: "health";
 };
 
 export type Business = {
