@@ -2,7 +2,8 @@
 // fixtures/replay/golden.json. Every cell comes from those records; a field the
 // provider did not return is written as "not returned", never filled in.
 // Run: npx tsx scripts/golden-report.ts <live-trace.jsonl> <replay-trace.jsonl> [earlier-live-trace.jsonl ...]
-import { readFileSync, writeFileSync } from "node:fs";
+// The Wonder section reads provenance/wonder-qc-hosted-*.json (hosted records saved after a content run).
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadFixture } from "../src/lib/demo/demo";
 
 type Line = Record<string, any>;
@@ -99,6 +100,25 @@ ${replayInv.filter((r: any) => !inv.some((i: any) => i.name === r.name)).map((r:
 
 - Offline, exactly this run: \`npm run demo -- --replay\` (no API key needed; any request that differs from the recording stops the run).
 - Live, with a changed input: \`npm run demo -- --golden --time 11:00\` (needs a model API key; capped by DEMO_CAP_USD, default $0.30). It asserts the invariants above, not the wording: the slot is held pending approval, the booked price equals \`priceOn\` (code-computed), owner approval confirms it, the Hebrew reply is a verified model reply, every final reply has a verifier verdict, and the verifier blocks at least one reply.
+
+## Wonder creative QC (hosted content run)
+
+${(() => {
+  const files = readdirSync("provenance").filter((f) => /^wonder-qc-hosted-.*\.json$/.test(f)).sort();
+  if (!files.length) return "No hosted Wonder QC record in provenance/.";
+  const w = JSON.parse(readFileSync(`provenance/${files.at(-1)}`, "utf8"));
+  const row = w.ledger.find((l: any) => l.model === "muse-wonder-1.0");
+  const total = w.ledger.reduce((n: number, l: any) => n + l.settledUsd, 0);
+  return [
+    `Record: [\`provenance/${files.at(-1)}\`](${files.at(-1)}). ${w.note}`,
+    "",
+    "| Step | Input | API request | Raw response | Tool result | Verifier verdict | Ledger | Booking state | Video |",
+    "|---|---|---|---|---|---|---|---|---|",
+    `| QC | feed export of creative \`${w.creativeId.slice(0, 8)}\` (${w.qc?.sent ?? "not recorded"}), object "${w.object}" | \`/v1/chat/completions\` muse-wonder-1.0, image_url part, json_schema \`creative_qc\` | ${cell(JSON.stringify(w.qc?.answer ?? null), 140)} | – | QC ${String(w.qc?.status ?? "not recorded").toUpperCase()} (advisory; decided by code from the three checks; the owner approves) | ${row ? `reserved ${usd(row.reservedUsd)}, settled ${usd(row.settledUsd)}; in ${row.tokensIn}, out ${row.tokensOut} (reasoning ${row.reasoningTokens ?? "not returned"})` : "–"} | creative ${w.status} | TBD |`,
+    "",
+    `Whole content run: ${w.ledger.length} calls (${w.ledger.map((l: any) => l.model).join(", ")}), ${usd(total)} (n=1). The provider request id for this call was not kept in the hosted record.`,
+  ].join("\n");
+})()}
 
 ## Image and audio outputs
 

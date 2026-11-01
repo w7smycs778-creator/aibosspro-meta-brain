@@ -49,6 +49,8 @@ export type QcVerdict =
       modelOverallDisagrees?: boolean;
       sent: string;
       costUsd: number;
+      /** x-request-id of the Wonder response, when the provider sent one. */
+      providerRequestId: string | null;
     }
   | { status: "not_run"; model: string; checkedAt: string; reason: string; costUsd: number };
 
@@ -122,6 +124,7 @@ export async function runCreativeQc(
     ...(answer.overall_pass !== checksPass && { modelOverallDisagrees: true }),
     sent: `${QC_IMAGE_PX}px JPEG of the feed export`,
     costUsd,
+    providerRequestId: r.responseHeaders?.["x-request-id"] ?? null,
   };
 }
 
