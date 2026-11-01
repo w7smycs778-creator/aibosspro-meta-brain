@@ -149,6 +149,18 @@ describe("POST events", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("logs the engine error's message, not just its name, when processing throws", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    engine.handleInbound.mockRejectedValueOnce(new Error("business biz_x has no approved brain; run store:reset"));
+    const body = textEvent("wamid.throws");
+    expect((await post(body)).status).toBe(200);
+    await flush();
+    expect(errors).toHaveBeenCalledWith("whatsapp reply failed", expect.objectContaining({
+      error: "Error",
+      message: "business biz_x has no approved brain; run store:reset",
+    }));
+  });
+
   it("sends nothing when the engine has no reply", async () => {
     engine.handleInbound.mockResolvedValue({ replyText: null, outcome: "not_active" });
     expect((await post(textEvent("wamid.p4"))).status).toBe(200);

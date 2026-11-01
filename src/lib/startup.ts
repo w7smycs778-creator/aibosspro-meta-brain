@@ -1,6 +1,7 @@
 import { loadHardCapNano } from "./gateway/config";
 import type { Env } from "./gateway/types";
 import { resolveBackend } from "./storage";
+import type { Storage } from "./storage/types";
 
 /**
  * Server start check. Throws when MODEL_SPEND_HARD_CAP_USD is missing or
@@ -25,6 +26,20 @@ export function refuseStartOnBadConfig(env: Env = process.env): void {
 }
 
 /**
+ * Warning text when the business inbound WhatsApp messages go to
+ * (WHATSAPP_BUSINESS_ID, else the seed business) has no approved brain: every
+ * inbound message would then fail. Never includes the value, only its length.
+ */
+export async function whatsappBusinessWarning(store: Storage, env: Env = process.env): Promise<string | null> {
+  const { SEED_BUSINESS_ID } = await import("./storage/seed");
+  const raw = env.WHATSAPP_BUSINESS_ID;
+  const id = raw || SEED_BUSINESS_ID;
+  if (await store.getBrain(id, { approvedOnly: true })) return null;
+  const value = raw ? `value length ${raw.length}` : "unset, seed default used";
+  return `WHATSAPP_BUSINESS_ID does not resolve to a business with an approved brain (${value}); inbound WhatsApp messages will fail`;
+}
+
+/**
  * Finishes turns a previous process left half done (a recorded tool call with
  * no result, a reply still pending delivery). No model calls. Best effort: a
  * failure is logged and the server keeps starting.
@@ -35,7 +50,10 @@ export async function resumeAtStartup(env: Env = process.env): Promise<void> {
     const { resumeBusiness } = await import("./engine/resume");
     const { channelDeliver } = await import("./engine/delivery");
     const { SEED_BUSINESS_ID } = await import("./storage/seed");
-    const report = await resumeBusiness({ store: await getStore(), deliver: channelDeliver, now: () => new Date() }, env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID);
+    const store = await getStore();
+    const warning = await whatsappBusinessWarning(store, env);
+    if (warning) console.warn(`startup warning: ${warning}`);
+    const report = await resumeBusiness({ store, deliver: channelDeliver, now: () => new Date() }, env.WHATSAPP_BUSINESS_ID || SEED_BUSINESS_ID);
     console.log("resume at startup", report);
   } catch (err) {
     console.error("resume at startup failed", { error: err instanceof Error ? err.message : String(err) });
