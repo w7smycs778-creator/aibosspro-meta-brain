@@ -72,7 +72,7 @@ Anchored to commit \`${fixture.commit}\` (recorded ${fixture.recordedAt}). Model
 
 Raw records: LIVE trace [\`${livePath}\`](${livePath.replace(/^provenance\//, "")}), REPLAY trace [\`${replayPath}\`](${replayPath.replace(/^provenance\//, "")}), recorded request/response pairs [\`fixtures/replay/golden.json\`](../fixtures/replay/golden.json) (exchange \`seq\` = the # below; request bodies as sent, without request headers; response bodies and headers as received, cookies dropped).
 
-The scenario is fictional: Cedar Street Barbers and Clinique Physio Érable are invented demo businesses; Dana and 000-0000 are made up. Every reply below was produced by the model live and is replayed, not rewritten.
+The scenario is fictional: Cedar Street Barbers and Clinique Physio Érable are invented demo businesses; Dana and 000-0000 are made up. Every model reply below was produced live and is replayed, not rewritten; the \`[AI assistant]\` prefix and the owner-approval reply are fixed code strings, not model output.
 
 ## Steps
 

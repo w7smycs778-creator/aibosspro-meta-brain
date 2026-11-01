@@ -1,20 +1,20 @@
 # AIBOSSPRO Meta Brain
 
-An AI front desk for a small service business, built on Meta's models. The owner describes the business once, by voice or text; Muse Spark turns that into a structured "brain" (services, prices, hours, discount rules, tone, languages) that the owner reviews and approves. Customers then chat with an assistant (a customer panel, a terminal simulator, or WhatsApp) that answers in their language (English, Hebrew, Spanish, French), checks real availability, quotes prices computed by code, and requests bookings that only the owner can approve. Every reply passes a deterministic verifier before it is sent. The same brain drives a content engine: SAM 3.1 cuts the product out of a photo, Muse Image paints a scene, code composites the offer and price, Spark writes a verified caption, and the owner approves the post.
+An AI front desk for a small service business, built on Meta's models. The owner describes the business once, by voice or text; Muse Spark turns that into a structured "brain" (services, prices, hours, discount rules, tone, languages) that the owner reviews and approves. Customers then chat with an assistant (a customer panel, a terminal simulator, or WhatsApp) that answers in their language (English, Hebrew, Spanish, French), checks real availability, quotes prices computed by code, and requests bookings that only the owner can approve. Every model-generated reply passes a deterministic verifier before it is sent; hand-off notices and owner decision replies are fixed code strings, not model output. The same brain drives a content engine: SAM 3.1 cuts the product out of a photo, Muse Image paints a scene, code composites the offer and price, Spark writes a verified caption, Muse Wonder checks the result, and the owner approves it.
 
-Every AI reply is labelled as AI. Nothing is booked or published without the owner's approval. Owner switches per conversation: AUTO, HUMAN, PAUSED.
+Every model-generated reply, and the hand-off notice, starts with an AI label ("[AI assistant]" in the customer's language). Nothing is booked without the owner's approval. Content is approved and exported as post and story assets; nothing is published to Instagram or anywhere else. Owner switches per conversation: AUTO, HUMAN, PAUSED.
 
-**Everything you see is fictional.** The four demo businesses, their prices, customers ("Dana, 000-0000") and the bundled product photo are invented. Recorded model outputs are labelled as recorded wherever they appear (REPLAY mode, `fixtures/replay/`, `provenance/`).
+**Everything you see is fictional.** The four demo businesses, their prices, customers ("Dana, 000-0000") and the bundled product photo are invented. Recorded model outputs live in `fixtures/replay/` and `provenance/`, and REPLAY runs say so on their header line and on every step line.
 
 ## 5-minute setup (clean clone)
 
-You need git and Node 22.12 or newer, or Node 20.19 or newer (`npm ci` refuses older versions). macOS or Linux. Check with `node -v`. To switch versions with nvm, run `nvm install && nvm use` inside the repository (it reads `.nvmrc`); if your shell says `nvm: command not found`, load it first with `. ~/.nvm/nvm.sh`, or install Node 22 from https://nodejs.org. nvm switches only the current shell, so run the commands below in that same shell.
+You need git and Node 22.12 or newer, or Node 20.19 or newer (`npm ci` refuses older versions). macOS or Linux. Check with `node -v`. To switch versions with nvm, run `nvm install && nvm use` inside the repository (it reads `.nvmrc`); if your shell says `nvm: command not found`, load it first with `. ~/.nvm/nvm.sh`, or install Node 22 from https://nodejs.org. nvm switches only the current shell, so run the commands below in that same shell. After switching Node versions, run `npm ci` again: modules built under one version fail under another (`NODE_MODULE_VERSION` mismatch, seen with Node 20 modules under Node 22).
 
 ```bash
 cd ~                       # anywhere in your home directory, NOT /tmp (see "Where the ledger lives")
 git clone https://github.com/w7smycs778-creator/aibosspro-meta-brain.git meta-brain && cd meta-brain
 nvm install && nvm use     # only if `node -v` is older than the versions above (see the note above if nvm is not found)
-npm ci
+npm ci                     # run again after any Node version switch (native modules are built per Node version)
 cp .env.example .env
 npm run demo               # REPLAY: the recorded golden scenario, offline, no API key needed
 ```
@@ -49,7 +49,7 @@ The web app (owner screen, customer panel, onboarding, content) is `npm run judg
 | If something differs | a request that differs from the recording stops the run ("REPLAY: call N differs from the recording") | a model error stops the run ("LIVE ERROR (no fallback to REPLAY)") |
 | Cost | none billed (the recorded cost is written to the local demo ledger, labelled as replayed) | real, capped by `DEMO_CAP_USD` and `DEMO_MAX_CALLS` |
 
-The mode is printed in capitals at the start and on every line of the run. LIVE never falls back to REPLAY. REPLAY only reproduces the recorded inputs; to try your own input, use LIVE (`npm run demo -- --golden --time 11:00` changes the requested time and still checks the same invariants).
+The mode is printed in capitals on the header line and at the start of every step, invariant and ledger line. LIVE never falls back to REPLAY. REPLAY only reproduces the recorded inputs; to try your own input, use LIVE (`npm run demo -- --golden --time 11:00` changes the requested time and still checks the same invariants).
 
 Every run writes `provenance/traces/<timestamp>.jsonl`: each model call (endpoint, model, provider request id when returned, HTTP status, latency, tokens, finish reason), each step's tool calls and results, verifier verdicts, ledger rows (reservation and settlement), and the booking state. [provenance/GOLDEN-RUN.md](provenance/GOLDEN-RUN.md) is the step-by-step evidence table of the recorded run, generated from its trace and fixture.
 
@@ -87,7 +87,7 @@ Four demo businesses, one per supported language. Pick one with the business sel
 | Clinique Physio Érable (Montreal) | French, English | America/Toronto, $ CA | Massage thérapeutique 15% off on Tuesdays: 85 $ CA instead of 100 $ CA |
 
 1. **Customer panel: `/owner`, right column.** `Do you have Tuesday 10:00 for a cut plus beard?` quotes the Tuesday price computed by code; `Book it, I'm Dana 000-0000` creates a PENDING booking and an owner approval. Try Hebrew, Spanish or French on the matching business. Open "Tool trace" under a reply for each tool call and the verifier's verdict.
-2. **Booking approval: `/owner`, "Pending approvals".** Approve (the booking becomes CONFIRMED and the customer gets a confirmation in their language) or Reject.
+2. **Booking approval: `/owner`, "Pending approvals".** Approve (the booking becomes CONFIRMED and a confirmation in the customer's language is sent; on WhatsApp, if the customer's 24-hour window has closed, it is queued and sent when they write again) or Reject.
 3. **Content: `/owner`, "Content".** Choose `fixtures/demo/beard-oil.jpg` (drawn from shapes by `scripts/make-sample-photo.ts`, not a real photo), pick an offer, type one simple word for the object to cut out (`bottle`), Generate (four model calls: SAM 3.1, Muse Image, Muse Spark caption, Muse Wonder QC). If SAM finds nothing, you are told so and nothing is generated. The post shows "Wonder QC: PASS" or "Wonder QC: FAIL — reasons"; you still approve or reject.
 4. **Onboarding: `/onboard`** (optional; the seeded brains are approved). Type or record how the business works, review the draft, approve.
 
@@ -95,13 +95,13 @@ Locally `/owner` and `/onboard` need no login. Hosted, they return 404 unless yo
 
 ## The verifier is bounded
 
-Before any reply or booking request leaves, deterministic code checks it against the approved brain and the latest tool results: prices and discounts (and the day they apply), durations, times (opening boundaries or offered slots), booking claims ("confirmed" before the owner approved, in four languages, with negations), promises to check later, and, for health businesses, diagnostic or treatment advice. A block is fed back to the model once; a second block hands the conversation to the owner.
+Before any model-generated reply or booking request leaves, deterministic code checks it against the approved brain and the latest tool results: prices and discounts (and the day they apply), durations, times (opening boundaries or offered slots), booking claims ("confirmed" before the owner approved, in four languages, with negations), promises to check later, and, for health businesses, diagnostic or treatment advice. A block is fed back to the model once; a second block hands the conversation to the owner. Fixed code strings (the hand-off notice, owner approve/reject replies) are not verified.
 
 It is pattern-based, not a proof. It catches what it can tie to the brain; phrasings outside its patterns pass, and it has false positives: in the recorded golden run it blocks a reply that repeats a customer's "12:45" because 12:45 is neither an opening boundary nor a slot (the model then corrects itself).
 
 ## Spend safety
 
-- Every model call goes through one gateway (`src/lib/gateway/`) that reserves the worst-case cost in the durable ledger before dispatch and settles the real cost after. One file (`meta-dispatcher.ts`) talks to the Meta API; a test fails if any other source file does.
+- Every model call goes through one gateway (`src/lib/gateway/`) that reserves a conservative cost estimate in the durable ledger before dispatch and settles the real cost after (a settlement can exceed its reservation; for Wonder's image input the estimate assumes 8,192 tokens, because Meta does not document how images are counted). One file (`meta-dispatcher.ts`) talks to the Meta API; a test fails if any other source file does.
 - `MODEL_SPEND_HARD_CAP_USD` is required and can never exceed $130. `LIVE_CREDITS_VERIFIED` is a human switch; until it is `true` no request reaches Meta and customer messages go to the owner.
 - Measured in the recorded golden run: $0.0013 to $0.0040 per model call, $0.0017 to $0.0093 per customer turn (n=8 calls, 4 turns); a content post about $0.03 with Wonder QC (4 calls, n=1; Wonder $0.0114 of it).
 
@@ -125,12 +125,12 @@ The hosted deploy answers a WhatsApp Cloud API test number through the same engi
 
 Built Oct 27 to Nov 4, 2026: all code in this repository (engine, tools, verifier, gateway and ledger, storage, WhatsApp webhook, onboarding, content engine, owner screen, demo and replay, tests). Before that there were only planning documents. Dated log: [PROVENANCE.md](PROVENANCE.md).
 
-Pre-existing dependencies, used as published: Next.js, React, `@supabase/supabase-js`, `better-sqlite3`, `sharp`, Meta's `@meta-sam/parser`, `opentype.js`, Tailwind, Vitest, tsx. Fonts: Inter and Heebo under the SIL Open Font License (`assets/fonts/OFL-*.txt`), bundled so composites render the same on every host.
+Pre-existing dependencies, used as published: Next.js, React, `@supabase/supabase-js`, `better-sqlite3`, `sharp`, Meta's `@meta-sam/parser`, `opentype.js`, Tailwind, Vitest, tsx. Fonts: Inter and Heebo under the SIL Open Font License (`assets/fonts/OFL-*.txt`), bundled so composite text never depends on the host's system fonts.
 
 ## Known limits
 
 - **Slot lock is on start time only.** Two bookings with the same start are impossible (unique index), but overlapping durations (a 30-minute and a 50-minute service 15 minutes apart) are only prevented by the availability check just before the request, not by the store.
-- **No approved WhatsApp template.** A confirmation sent after the customer's 24-hour window is queued, shown to the owner, and sent when the customer writes again; it is not sent as a template.
+- **No approved WhatsApp template.** A confirmation that WhatsApp refuses because the customer's 24-hour window has closed (Graph error 131047) is queued, shown to the owner, and sent when the customer writes again; it is not sent as a template. This path is tested against a mocked 131047 response, not yet observed live; any other send failure is recorded as failed, not queued.
 - **Approval is not bound to a brain version.** A booking made under one brain version can be approved after a newer version is approved; the price is fixed on the booking when it is requested.
 - **A failed inbound WhatsApp message is retried only on redelivery.** Its claim is released if nothing was recorded, but Meta does not redeliver after the webhook's 200, so in practice the customer must write again.
 - **The verifier is pattern-based** (see above).
