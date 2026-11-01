@@ -426,6 +426,8 @@ describe("WhatsApp default mode", () => {
 });
 
 const XMP = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:source>synthetic-test-generator</dc:source></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>';
+/** Same shape as Muse Image's XMP (2026-11-01): one IPTC DigitalSourceType attribute. */
+const MUSE_LIKE_XMP = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" Iptc4xmpExt:DigitalSourceType="http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"/></rdf:RDF></x:xmpmeta>';
 
 /** In-memory stand-in for the Supabase Storage client surface the media store uses. */
 function fakeSupabaseStorage() {
@@ -461,7 +463,7 @@ describe("media provenance and hosted media", () => {
     const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
     expect(manifest.museImage).toMatchObject({ requested: true, status: 200, providerRequestId: "req_synthetic_42", responseHeaders: { "x-request-id": "req_synthetic_42" } });
     expect(manifest.museImage.original).toMatchObject({ format: "png", xmp: true, exif: false, c2pa: false, sha256: createHash("sha256").update(raw).digest("hex") });
-    expect(manifest.preserved.feed).toEqual({ xmp: true, notCarried: [] });
+    expect(manifest.preserved.feed).toEqual({ xmp: true, digitalSourceType: null, notCarried: [] });
     expect((await sharp(c.media.feed).metadata()).xmp?.toString()).toContain("synthetic-test-generator");
     for (const a of manifest.assets) expect(createHash("sha256").update(readFileSync(join(dirname(c.media.feed), a.file))).digest("hex")).toBe(a.sha256);
   });
@@ -472,7 +474,7 @@ describe("media provenance and hosted media", () => {
     const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
     expect(manifest.museImage).toMatchObject({ responseHeaders: null, providerRequestId: null });
     expect(manifest.museImage.original).toMatchObject({ xmp: false, exif: false, iptc: false, c2pa: false });
-    expect(manifest.preserved.feed).toEqual({ xmp: false, notCarried: [] });
+    expect(manifest.preserved.feed).toEqual({ xmp: false, digitalSourceType: null, notCarried: [] });
   });
 
   it("with the Supabase store, every file goes to the private bucket and nothing is written to disk", async () => {
@@ -497,3 +499,33 @@ describe("SupabaseMediaStore.fromEnv", () => {
     expect(() => SupabaseMediaStore.fromEnv({ SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-placeholder" })).not.toThrow();
   });
 });
+
+describe("digital source type on exports", () => {
+  it("the original keeps trainedAlgorithmicMedia byte for byte; exports say compositeWithTrainedAlgorithmicMedia, confirmed on re-read, and the manifest records both", async () => {
+    const store = await cedarStore();
+    const raw = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).withXmp(MUSE_LIKE_XMP).png().toBuffer();
+    const c = await generateCreative(deps(store, stub({ segment: null, imageBytes: raw })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    expect(readFileSync(c.media.sceneOriginal!).equals(raw)).toBe(true);
+    for (const f of [c.media.feed, c.media.story]) {
+      const x = (await sharp(f).metadata()).xmp!.toString();
+      expect(x).toContain("digitalsourcetype/compositeWithTrainedAlgorithmicMedia");
+      expect(x).not.toContain("digitalsourcetype/trainedAlgorithmicMedia");
+    }
+    const m = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(m.preserved.feed.digitalSourceType).toMatchObject({
+      received: "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia",
+      written: "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia",
+      verified: true,
+    });
+    expect(m.preserved.feed.digitalSourceType.reason).toMatch(/owner's photo/);
+  });
+
+  it("writes no digital source type when Meta sent none", async () => {
+    const store = await cedarStore();
+    const c = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    const m = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(m.preserved.feed.digitalSourceType).toBeNull();
+    expect((await sharp(c.media.feed).metadata()).xmp).toBeUndefined();
+  });
+});
+

@@ -70,21 +70,49 @@ export async function xmpOf(bytes: Buffer): Promise<string | null> {
   return meta?.xmp ? meta.xmp.toString("utf8") : null;
 }
 
-export type Carried = { xmp: boolean; notCarried: Array<{ field: string; reason: string }> };
+export type Carried = {
+  xmp: boolean;
+  /** IPTC digital source type: what Meta sent and what the export says; null when Meta sent none. */
+  digitalSourceType: { received: string; written: string; verified: boolean; reason: string } | null;
+  notCarried: Array<{ field: string; reason: string }>;
+};
+
+const DST_BASE = "http://cv.iptc.org/newscodes/digitalsourcetype/";
+const DST_RE = /http:\/\/cv\.iptc\.org\/newscodes\/digitalsourcetype\/([A-Za-z]+)/;
+const AI_ONLY = "trainedAlgorithmicMedia";
+const COMPOSITE = "compositeWithTrainedAlgorithmicMedia";
 
 /**
  * Copies what can be copied from the generated scene into a composite PNG and
  * re-reads the result, so "carried" is only claimed when the output has it.
+ * A scene marked trainedAlgorithmicMedia becomes compositeWithTrainedAlgorithmicMedia
+ * on the export: the export also holds the owner's photo and printed text.
  */
 export async function carryMetadata(composite: Buffer, source: ImageFacts | null, sourceXmp: string | null): Promise<{ png: Buffer; carried: Carried }> {
   const notCarried: Carried["notCarried"] = [];
   let png = composite;
   let xmp = false;
+  let digitalSourceType: Carried["digitalSourceType"] = null;
   if (source) {
     if (sourceXmp) {
-      png = await sharp(composite).withXmp(sourceXmp).png().toBuffer();
-      xmp = (await inspectImage(png)).xmp;
+      const received = sourceXmp.match(DST_RE)?.[1] ?? null;
+      const written = received === AI_ONLY ? COMPOSITE : received;
+      const exportXmp = received === AI_ONLY ? sourceXmp.replaceAll(DST_BASE + AI_ONLY, DST_BASE + COMPOSITE) : sourceXmp;
+      png = await sharp(composite).withXmp(exportXmp).png().toBuffer();
+      const reread = await xmpOf(png);
+      xmp = reread !== null;
       if (!xmp) notCarried.push({ field: "xmp", reason: "written but not found on re-read" });
+      if (received && written) {
+        digitalSourceType = {
+          received: DST_BASE + received,
+          written: DST_BASE + written,
+          verified: reread?.match(DST_RE)?.[1] === written,
+          reason:
+            received === AI_ONLY
+              ? "the export combines the Muse Image scene with the owner's photo and code-drawn text, so it is a composite with AI-generated media, not wholly AI-generated"
+              : "carried unchanged",
+        };
+      }
     }
     if (source.c2pa) notCarried.push({ field: "c2pa", reason: "a C2PA manifest signs the original pixels; any edit invalidates it. The untouched original is kept." });
     if (source.exif) notCarried.push({ field: "exif", reason: "not copied: the composite is a new image (sharp cannot copy raw EXIF across images)" });
@@ -92,7 +120,7 @@ export async function carryMetadata(composite: Buffer, source: ImageFacts | null
     if (source.icc) notCarried.push({ field: "icc", reason: "not copied; composites are sRGB" });
     if (source.pngTextKeys.length) notCarried.push({ field: `png text (${source.pngTextKeys.join(", ")})`, reason: "not copied" });
   }
-  return { png, carried: { xmp, notCarried } };
+  return { png, carried: { xmp, digitalSourceType, notCarried } };
 }
 
 /** Response headers worth keeping as identifiers, when the provider sent them. */
