@@ -42,11 +42,22 @@ export function scenePrompt(brain: BusinessBrain, offer: Offer): string {
   return [
     `A photographic background with a ${tone} feel, for a small business offering ${services}.`,
     `It promotes the ${offer.serviceName.toLowerCase()}: warm light, softly blurred interior, an empty surface in the lower half where a product will be placed.`,
-    "No words, no letters, no numbers, no logos, no signs, no people. Square composition.",
+    "No text of any kind: no words, no letters, no numbers, no logos, no signage, no labels, no people. Square composition.",
   ].join(" ");
 }
 
 export type GenerateInput = { businessId: string; photo: Buffer; offerId: string; object?: string; mediaDir?: string; media?: MediaStore };
+
+/** What to cut out, as SAM is asked for it: trimmed, lower case, single spaces. */
+export function normalizeObject(raw: string | undefined): string {
+  const object = (raw ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!object) throw new ContentError("Say what to cut out of the photo, in one simple word like clippers.", 400);
+  return object;
+}
+
+function notFound(object: string): ContentError {
+  return new ContentError(`Couldn't find '${object}' in the photo — try one simple word like clippers.`, 422);
+}
 
 /** The creative's media store: given, else disk locally and Supabase Storage when hosted. */
 function mediaFor(deps: EngineDeps, input: { mediaDir?: string; media?: MediaStore }): MediaStore {
@@ -69,7 +80,8 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
     await media.put(ref(file), bytes, contentTypeOf(file));
     assets.push({ file, role, bytes: Buffer.byteLength(bytes), sha256: sha256(bytes) });
   };
-  const diagnostics: Record<string, unknown> = { object: input.object?.trim() || "main object" };
+  const object = normalizeObject(input.object);
+  const diagnostics: Record<string, unknown> = { object };
 
   const original = await sharp(input.photo).rotate().jpeg({ quality: 92 }).toBuffer().catch(() => {
     throw new ContentError("the photo could not be read as an image", 400);
@@ -79,30 +91,25 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
   await save("sent.jpg", sent, "copy sent to SAM");
   const { width: sw, height: sh } = await sharp(sent).metadata();
 
-  // Cutout.
-  let cutoutKind: Creative["cutoutKind"] = "unavailable";
-  let subject: Buffer = sent;
-  let cutoutRef: string | null = null;
-  if (deps.gateway) {
-    const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: String(diagnostics.object), image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: input.businessId });
-    diagnostics.segmentation = { outcome: r.outcome, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
-    if (r.outcome === "ok" && r.output) {
-      // The full output is kept so a mask can be decoded again without another call.
-      await save("sam-output.json", r.output, "raw SAM output");
-      (diagnostics.segmentation as Record<string, unknown>).savedOutput = ref("sam-output.json");
-    }
-    if (r.outcome === "ok") {
-      const seg = await parseSegmentation(r.output, sw!, sh!);
-      const cut = await buildCutout(sent, seg, original);
-      diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason };
-      cutoutKind = cut.kind;
-      if (cut.kind !== "unavailable") {
-        subject = cut.png;
-        await save("cutout.png", cut.png, "cutout");
-        cutoutRef = ref("cutout.png");
-      }
-    }
+  // Cutout. Without one there is no creative: the owner is told why instead of getting a framed photo.
+  if (!deps.gateway) throw new ContentError(`model unavailable: ${deps.gatewayError ?? "no gateway"}; nothing was generated`, 503);
+  const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: object, image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: input.businessId });
+  diagnostics.segmentation = { outcome: r.outcome, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
+  if (r.outcome === "ok" && r.output) {
+    // The full output is kept so a mask can be decoded again without another call.
+    await save("sam-output.json", r.output, "raw SAM output");
+    (diagnostics.segmentation as Record<string, unknown>).savedOutput = ref("sam-output.json");
   }
+  if (r.outcome === "denied") throw new ContentError(`cutout refused: ${r.reason}: ${r.detail}; nothing was generated`, 503);
+  if (r.outcome === "failed") throw new ContentError(`cutout failed (status ${r.status}); nothing was generated`, 502);
+  const seg = await parseSegmentation(r.output, sw!, sh!);
+  const cut = await buildCutout(sent, seg, original);
+  if (cut.kind === "unavailable") throw notFound(object);
+  diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason };
+  const cutoutKind: Creative["cutoutKind"] = cut.kind;
+  const subject: Buffer = cut.png;
+  await save("cutout.png", cut.png, "cutout");
+  const cutoutRef: string | null = ref("cutout.png");
 
   // Scene: the provider's bytes are stored untouched, with the response headers, before any processing.
   let scene: Buffer | null = null;
@@ -135,7 +142,7 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
 
   // Composites: always both sizes, from the same parts; scene metadata carried where possible.
   const band: Band = { name: brain.name, headline: offer.headline, price: offer.priceText, note: offer.kind === "discount" ? `Normally ${offer.listPriceText}` : null };
-  const parts = { scene, brandColor: brandColor(brain.name), subject, subjectKind: cutoutKind === "unavailable" ? ("framed" as const) : ("cutout" as const), band };
+  const parts = { scene, brandColor: brandColor(brain.name), subject, subjectKind: "cutout" as const, band };
   const preserved: Record<string, Carried> = {};
   for (const kind of ["feed", "story"] as const) {
     const { png, carried } = await carryMetadata(await composite(parts, kind), museFacts, museXmp);
@@ -241,28 +248,29 @@ export async function regenerateCreative(deps: EngineDeps, creativeId: string, o
       cutoutPath = at("cutout.png");
       subject = cut.png;
     }
-  } else if (opts.segment && deps.gateway) {
+  } else if (opts.segment) {
+    if (!deps.gateway) throw new ContentError(`model unavailable: ${deps.gatewayError ?? "no gateway"}; the creative is unchanged`, 503);
     const sent = await samCopy(original);
     await media.put(at("sent.jpg"), sent, "image/jpeg");
     const { width: sw, height: sh } = await sharp(sent).metadata();
-    const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: opts.object, image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: creative.businessId });
-    diagnostics.object = opts.object;
+    const object = normalizeObject(opts.object);
+    const r = await deps.gateway.call({ kind: "segment", model: SEGMENT_MODEL, prompt: object, image: new Uint8Array(sent), mimeType: "image/jpeg", businessId: creative.businessId });
+    diagnostics.object = object;
     diagnostics.segmentation = { outcome: r.outcome, sent: `${sw}x${sh}`, ...(r.outcome === "denied" ? { reason: r.reason, detail: r.detail } : { status: r.status }), output: describeOutput(r.outcome === "denied" ? undefined : r.output) };
     if (r.outcome === "ok" && r.output) {
       await media.put(at("sam-output.json"), r.output, "application/json");
       (diagnostics.segmentation as Record<string, unknown>).savedOutput = at("sam-output.json");
     }
-    if (r.outcome === "ok") {
-      const seg = await parseSegmentation(r.output, sw!, sh!);
-      const cut = await buildCutout(sent, seg, original);
-      diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason, boxInSent: seg.box, ...(seg.undecodedMask && { undecodedMask: seg.undecodedMask }) };
-      cutoutKind = cut.kind;
-      if (cut.kind !== "unavailable") {
-        await media.put(at("cutout.png"), cut.png, "image/png");
-        cutoutPath = at("cutout.png");
-        subject = cut.png;
-      }
-    }
+    if (r.outcome === "denied") throw new ContentError(`cutout refused: ${r.reason}: ${r.detail}; the creative is unchanged`, 503);
+    if (r.outcome === "failed") throw new ContentError(`cutout failed (status ${r.status}); the creative is unchanged`, 502);
+    const seg = await parseSegmentation(r.output, sw!, sh!);
+    const cut = await buildCutout(sent, seg, original);
+    if (cut.kind === "unavailable") throw notFound(object);
+    diagnostics.cutout = { format: seg.format, kind: cut.kind, reason: cut.reason, boxInSent: seg.box, ...(seg.undecodedMask && { undecodedMask: seg.undecodedMask }) };
+    cutoutKind = cut.kind;
+    await media.put(at("cutout.png"), cut.png, "image/png");
+    cutoutPath = at("cutout.png");
+    subject = cut.png;
   }
 
   const scene = creative.media.scene ? await media.get(creative.media.scene) : null;

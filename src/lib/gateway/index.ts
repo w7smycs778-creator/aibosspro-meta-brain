@@ -39,10 +39,12 @@ export function createLiveGateway(opts: {
   /** With run: at most this many billable attempts in the run, counted from the ledger. */
   maxCalls?: number;
   env?: Env;
+  /** The HTTP client under the dispatcher; the demo passes a recording or replaying one. */
+  fetchFn?: typeof fetch;
 }): SpendGateway {
   const env = opts.env ?? process.env;
   const ledger = new StoreSpendLedger(opts.store, loadSpendConfig(env));
-  const meta = new MetaDispatcher(env, fetch, opts.store);
+  const meta = new MetaDispatcher(env, opts.fetchFn ?? fetch, opts.store);
   const dispatcher = opts.run && opts.maxCalls !== undefined ? new CallLimitDispatcher(meta, opts.store, opts.run.id, opts.maxCalls) : meta;
   return new SpendGateway({ ledger, dispatcher, run: opts.run });
 }

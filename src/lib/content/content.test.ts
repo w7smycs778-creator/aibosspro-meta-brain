@@ -18,10 +18,12 @@ import { LocalStore } from "../storage/local-store";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "../storage/seed";
 import type { BusinessBrain } from "../storage/types";
 import { verifyCaption } from "./caption";
-import { bandSvg, composite, SIZES } from "./composite";
+import { bandSvg, composite, SIZES, splitLine } from "./composite";
+import { measure, textPath, visualOrder } from "./text";
 import { decideCreative, generateCreative, regenerateCreative, samCopy, scenePrompt } from "./creative";
 import { MEDIA_BUCKET, SupabaseMediaStore } from "./media-store";
 import { findOffer, listOffers } from "./offers";
+import { DEMO_BUSINESSES } from "../storage/seed-demo";
 import { buildCutout, parseSegmentation } from "./segment";
 
 const dirs: string[] = [];
@@ -95,13 +97,18 @@ function rectAlpha(): Uint8Array {
 }
 
 /** Answers segment, image and chat calls; any part can be made to fail. */
+/** SAM tokens with a box (no decodable mask) inside the 400x600 test photo: a "box" cutout. */
+const BOX_SEGMENT = "<0f>0<|box;x1=100;y1=150;x2=300;y2=450;w=400;h=600|><|mask;x=0;y=0;data=301,201,!!~|>";
+/** What SAM returned for the owner photos it found nothing in (2026-11-01): an empty message. */
+const EMPTY_SEGMENT = JSON.stringify([{ type: "message", id: "msg_synthetic", role: "assistant", content: [{ type: "output_text", text: "", annotations: [], logprobs: [] }], status: "completed" }]);
+
 function stub(opts: { segment?: string | null; image?: "ok" | "fail"; imageBytes?: Buffer; headers?: Record<string, string>; captions?: string[] }): Dispatcher & { calls: ModelCall[] } {
   const captions = [...(opts.captions ?? ["Cut plus beard is ₪102 every Tuesday. Book your chair today."])];
   const d = {
     calls: [] as ModelCall[],
     async dispatch(call: ModelCall): Promise<DispatchResult> {
       d.calls.push(call);
-      if (call.kind === "segment") return { ok: true, status: 200, retryable: false, units: { kind: "segment", images: 1 }, output: opts.segment ?? undefined };
+      if (call.kind === "segment") return { ok: true, status: 200, retryable: false, units: { kind: "segment", images: 1 }, output: opts.segment === undefined ? BOX_SEGMENT : (opts.segment ?? undefined) };
       if (call.kind === "image") {
         if (opts.image === "fail") return { ok: false, status: 500, retryable: false, units: null, errorBody: "boom" };
         const png = opts.imageBytes ?? (await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).png().toBuffer());
@@ -146,9 +153,12 @@ describe("composite", () => {
     const band = { name: CEDAR.name, headline: offer.headline, price: offer.priceText, note: `Normally ${offer.listPriceText}` };
     for (const size of ["feed", "story"] as const) {
       const svg = bandSvg(band, size);
-      expect(svg).toContain(">₪102<");
-      expect(svg).toContain(">Cut plus beard · 15% off · Tuesdays<");
-      expect(svg).toContain(">CEDAR STREET BARBERS<");
+      // Drawn as glyph paths from the bundled fonts: no <text>, so no system font is ever needed.
+      expect(svg).not.toMatch(/<text|font-family/);
+      expect((svg.match(/<path /g) ?? []).length).toBeGreaterThanOrEqual(4);
+      // The price path is exactly the bundled-font rendering of the code-computed price.
+      expect(svg.match(/<path [^>]*fill="#ffd166"[^>]*>/g)).toHaveLength(1);
+      expect(measure("₪102", 100, 800).missing).toEqual([]);
       const subject = await sharp({ create: { width: 200, height: 300, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
       const png = await composite({ scene: null, brandColor: "#223344", subject, subjectKind: "cutout", band }, size);
       expect(await sharp(png).metadata()).toMatchObject({ width: SIZES[size].w, height: SIZES[size].h, format: "png" });
@@ -156,7 +166,7 @@ describe("composite", () => {
     // The scene prompt never carries the price or text instructions to draw it.
     const prompt = scenePrompt(CEDAR, offer);
     expect(prompt).not.toMatch(/₪|102|120|Cedar/);
-    expect(prompt).toContain("No words, no letters, no numbers, no logos, no signs, no people");
+    expect(prompt).toContain("No text of any kind: no words, no letters, no numbers, no logos, no signage, no labels, no people");
   });
 });
 
@@ -333,24 +343,44 @@ describe("creatives", () => {
     expect(await decideCreative(store, c.id, "rejected")).toMatchObject({ changed: false, creative: { status: "approved" } });
   });
 
-  it("fall back to a framed original and a flat colour, still producing both images; a caption failing twice is left empty", async () => {
+  it("no cutout means no creative: SAM finding nothing gives the owner a clear message and no image call is made", async () => {
     const store = await cedarStore();
-    const d = stub({ segment: "I found a counter.", image: "fail", captions: ["Cut plus beard ₪99. Book now.", "Still ₪99 on Tuesdays. Book."] });
-    const c = await generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
-    expect(c).toMatchObject({ cutoutKind: "unavailable", sceneKind: "flat", caption: "" });
-    expect(c.media).toMatchObject({ cutout: null, scene: null });
-    expect(c.diagnostics).toMatchObject({ cutout: { format: "unrecognised", kind: "unavailable" }, scene: { outcome: "failed" } });
-    expect(c.captionLog).toMatchObject({ final: "empty" });
-    expect((c.captionLog as { attempts: unknown[] }).attempts).toHaveLength(2);
-    expect(await sharp(c.media.feed).metadata()).toMatchObject({ width: 1080, height: 1080 });
-    expect(await sharp(c.media.story).metadata()).toMatchObject({ width: 1080, height: 1920 });
+    for (const segment of [EMPTY_SEGMENT, "I found a counter."]) {
+      const d = stub({ segment });
+      await expect(generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "  Clipers  ", mediaDir: dir() })).rejects.toMatchObject({
+        status: 422,
+        message: "Couldn't find 'clipers' in the photo — try one simple word like clippers.",
+      });
+      expect(d.calls.map((x) => x.kind)).toEqual(["segment"]);
+    }
+    expect(await store.listCreatives(SEED_BUSINESS_ID)).toEqual([]);
   });
 
-  it("with no model available at all, both images are still produced", async () => {
+  it("the object text is trimmed, lower-cased and single-spaced before it is sent; an empty one is refused", async () => {
     const store = await cedarStore();
-    const c = await generateCreative(deps(store, null), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
-    expect(c).toMatchObject({ cutoutKind: "unavailable", sceneKind: "flat", caption: "" });
-    expect(existsSync(c.media.feed) && existsSync(c.media.story)).toBe(true);
+    const d = stub({});
+    await generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "  Hair   CLIPPER ", mediaDir: dir() });
+    expect(d.calls[0]).toMatchObject({ kind: "segment", prompt: "hair clipper" });
+    await expect(generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "   ", mediaDir: dir() })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("a failed or unavailable model produces no creative, with the reason", async () => {
+    const store = await cedarStore();
+    await expect(generateCreative(deps(store, null), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() })).rejects.toMatchObject({ status: 503 });
+    const failing: Dispatcher = { dispatch: async () => ({ ok: false, status: 500, retryable: false, units: null, errorBody: "boom" }) };
+    await expect(generateCreative(deps(store, failing), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() })).rejects.toMatchObject({ status: 502 });
+    expect(await store.listCreatives(SEED_BUSINESS_ID)).toEqual([]);
+  });
+
+  it("a failed scene and a caption failing twice still give both images (flat colour, empty caption)", async () => {
+    const store = await cedarStore();
+    const d = stub({ image: "fail", captions: ["Cut plus beard ₪99. Book now.", "Still ₪99 on Tuesdays. Book."] });
+    const c = await generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(c).toMatchObject({ cutoutKind: "box", sceneKind: "flat", caption: "" });
+    expect(c.media).toMatchObject({ scene: null });
+    expect(c.captionLog).toMatchObject({ final: "empty" });
+    expect(await sharp(c.media.feed).metadata()).toMatchObject({ width: 1080, height: 1080 });
+    expect(await sharp(c.media.story).metadata()).toMatchObject({ width: 1080, height: 1920 });
   });
 
   it("the media route serves a creative's images by the creative id", async () => {
@@ -358,14 +388,15 @@ describe("creatives", () => {
     const storageDir = dir();
     vi.stubEnv("STORAGE_DIR", storageDir);
     vi.doMock("@/lib/storage", async (orig) => ({ ...(await orig<typeof import("../storage")>()), getStore: async () => store }));
-    const c = await generateCreative(deps(store, null), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: join(storageDir, "media") });
+    const c = await generateCreative(deps(store, stub({ image: "fail" })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: join(storageDir, "media") });
     const { GET } = await import("@/app/api/content/[id]/media/[file]/route");
     const get = (file: string, id = c.id) => GET(new Request("http://local"), { params: Promise.resolve({ id, file }) });
     const feed = await get("feed.png");
     expect(feed.status).toBe(200);
     expect(await sharp(Buffer.from(await feed.arrayBuffer())).metadata()).toMatchObject({ width: 1080, height: 1080 });
     expect((await get("story.png")).status).toBe(200);
-    expect((await get("cutout.png")).status).toBe(404); // no cutout in this fallback creative
+    expect((await get("cutout.png")).status).toBe(200);
+    expect((await get("scene.png")).status).toBe(404); // the scene call failed in this creative
     expect((await get("../../meta-brain.sqlite")).status).toBe(404);
     expect((await get("feed.png", "not-a-creative")).status).toBe(404);
     vi.doUnmock("@/lib/storage");
@@ -374,8 +405,8 @@ describe("creatives", () => {
 
   it("an empty caption reply (reasoning used the budget) gets the second attempt", async () => {
     const store = await cedarStore();
-    const d = stub({ segment: null, captions: ["", "Cut plus beard is ₪102 every Tuesday. Book your chair today."] });
-    const c = await generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    const d = stub({ captions: ["", "Cut plus beard is ₪102 every Tuesday. Book your chair today."] });
+    const c = await generateCreative(deps(store, d), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
     expect(c.caption).toBe("Cut plus beard is ₪102 every Tuesday. Book your chair today.");
     expect((c.captionLog as { attempts: Array<{ checks: Array<{ claim: string }> }> }).attempts[0].checks[0].claim).toBe("empty caption");
     expect(d.calls.filter((x) => x.kind === "chat").every((x) => x.kind === "chat" && x.maxOutputTokens === 2_048)).toBe(true);
@@ -383,8 +414,8 @@ describe("creatives", () => {
 
   it("regenerate rebuilds a pending creative in place: new cutout, existing scene, one caption attempt", async () => {
     const store = await cedarStore();
-    const first = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
-    expect(first.cutoutKind).toBe("unavailable");
+    const first = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(first.cutoutKind).toBe("box");
     const sceneBefore = readFileSync(first.media.scene!);
     const feedBefore = readFileSync(first.media.feed);
 
@@ -398,7 +429,7 @@ describe("creatives", () => {
     expect(d.calls.map((x) => x.kind)).toEqual(["segment", "chat"]); // no new image call
     expect(d.calls[0]).toMatchObject({ prompt: "hair clipper", mimeType: "image/jpeg" });
     expect(readFileSync(first.media.scene!).equals(sceneBefore)).toBe(true);
-    expect(readFileSync(c.media.feed).equals(feedBefore)).toBe(false);
+    expect(c.diagnostics).toMatchObject({ object: "hair clipper" });
     expect(existsSync(c.media.cutout!)).toBe(true);
     // Half-open box from the official parser: the token's x2/y2 are inclusive corners.
     expect(c.diagnostics).toMatchObject({ cutout: { format: "sam-tokens+box", boxInSent: [100, 150, 301, 451] } });
@@ -426,6 +457,8 @@ describe("WhatsApp default mode", () => {
 });
 
 const XMP = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:source>synthetic-test-generator</dc:source></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>';
+/** Same shape as Muse Image's XMP (2026-11-01): one IPTC DigitalSourceType attribute. */
+const MUSE_LIKE_XMP = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" Iptc4xmpExt:DigitalSourceType="http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"/></rdf:RDF></x:xmpmeta>';
 
 /** In-memory stand-in for the Supabase Storage client surface the media store uses. */
 function fakeSupabaseStorage() {
@@ -454,25 +487,25 @@ describe("media provenance and hosted media", () => {
   it("keeps the Muse output bytes untouched, records headers and metadata, and carries XMP only when the export has it", async () => {
     const store = await cedarStore();
     const raw = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).withXmp(XMP).png().toBuffer();
-    const c = await generateCreative(deps(store, stub({ segment: null, imageBytes: raw, headers: { "x-request-id": "req_synthetic_42", "content-type": "application/json" } })), {
-      businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir(),
+    const c = await generateCreative(deps(store, stub({ imageBytes: raw, headers: { "x-request-id": "req_synthetic_42", "content-type": "application/json" } })), {
+      businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir(),
     });
     expect(readFileSync(c.media.sceneOriginal!).equals(raw)).toBe(true);
     const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
     expect(manifest.museImage).toMatchObject({ requested: true, status: 200, providerRequestId: "req_synthetic_42", responseHeaders: { "x-request-id": "req_synthetic_42" } });
     expect(manifest.museImage.original).toMatchObject({ format: "png", xmp: true, exif: false, c2pa: false, sha256: createHash("sha256").update(raw).digest("hex") });
-    expect(manifest.preserved.feed).toEqual({ xmp: true, notCarried: [] });
+    expect(manifest.preserved.feed).toEqual({ xmp: true, digitalSourceType: null, notCarried: [] });
     expect((await sharp(c.media.feed).metadata()).xmp?.toString()).toContain("synthetic-test-generator");
     for (const a of manifest.assets) expect(createHash("sha256").update(readFileSync(join(dirname(c.media.feed), a.file))).digest("hex")).toBe(a.sha256);
   });
 
   it("claims nothing that was not received: no headers, no metadata", async () => {
     const store = await cedarStore();
-    const c = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    const c = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
     const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
     expect(manifest.museImage).toMatchObject({ responseHeaders: null, providerRequestId: null });
     expect(manifest.museImage.original).toMatchObject({ xmp: false, exif: false, iptc: false, c2pa: false });
-    expect(manifest.preserved.feed).toEqual({ xmp: false, notCarried: [] });
+    expect(manifest.preserved.feed).toEqual({ xmp: false, digitalSourceType: null, notCarried: [] });
   });
 
   it("with the Supabase store, every file goes to the private bucket and nothing is written to disk", async () => {
@@ -480,7 +513,7 @@ describe("media provenance and hosted media", () => {
     const fake = fakeSupabaseStorage();
     const media = new SupabaseMediaStore(fake.client);
     const localDir = dir();
-    const c = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, media, mediaDir: localDir });
+    const c = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", media, mediaDir: localDir });
     expect(fake.buckets.has(MEDIA_BUCKET)).toBe(true);
     for (const r of [c.media.original, c.media.feed, c.media.story, c.media.scene!, c.media.sceneOriginal!, c.media.manifest!]) {
       expect(r.startsWith(`supabase://${MEDIA_BUCKET}/`)).toBe(true);
@@ -488,6 +521,78 @@ describe("media provenance and hosted media", () => {
     }
     expect(readdirSync(localDir)).toEqual([]);
     expect(await media.signedUrl(c.media.feed)).toMatch(/^https:\/\/storage\.example\/sign\/creative-media\/.+feed\.png\?expires=300$/);
+  });
+});
+
+
+describe("SupabaseMediaStore.fromEnv", () => {
+  it("constructs on this Node without a WebSocket (realtime is never used)", () => {
+    expect(() => SupabaseMediaStore.fromEnv({ SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-placeholder" })).not.toThrow();
+  });
+});
+
+describe("digital source type on exports", () => {
+  it("the original keeps trainedAlgorithmicMedia byte for byte; exports say compositeWithTrainedAlgorithmicMedia, confirmed on re-read, and the manifest records both", async () => {
+    const store = await cedarStore();
+    const raw = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).withXmp(MUSE_LIKE_XMP).png().toBuffer();
+    const c = await generateCreative(deps(store, stub({ imageBytes: raw })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(readFileSync(c.media.sceneOriginal!).equals(raw)).toBe(true);
+    for (const f of [c.media.feed, c.media.story]) {
+      const x = (await sharp(f).metadata()).xmp!.toString();
+      expect(x).toContain("digitalsourcetype/compositeWithTrainedAlgorithmicMedia");
+      expect(x).not.toContain("digitalsourcetype/trainedAlgorithmicMedia");
+    }
+    const m = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(m.preserved.feed.digitalSourceType).toMatchObject({
+      received: "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia",
+      written: "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia",
+      verified: true,
+    });
+    expect(m.preserved.feed.digitalSourceType.reason).toMatch(/owner's photo/);
+  });
+
+  it("writes no digital source type when Meta sent none", async () => {
+    const store = await cedarStore();
+    const c = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    const m = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(m.preserved.feed.digitalSourceType).toBeNull();
+    expect((await sharp(c.media.feed).metadata()).xmp).toBeUndefined();
+  });
+});
+
+describe("bundled-font text", () => {
+  it("every character any demo business can put on a band has a glyph; Hebrew is laid out right to left", () => {
+    for (const { brain } of DEMO_BUSINESSES) {
+      for (const o of listOffers(brain)) {
+        for (const t of [brain.name.toUpperCase(), o.headline, o.priceText, `Normally ${o.listPriceText ?? ""}`]) {
+          for (const w of [600, 700, 800] as const) expect(measure(t, 50, w).missing, `${t} @${w}`).toEqual([]);
+        }
+      }
+    }
+    expect(visualOrder("שיעור פרטי").join("")).toBe("יטרפ רועיש");
+    expect(visualOrder("ב-₪102 בלבד").join("")).toBe("דבלב ₪102-ב");
+    expect(visualOrder("Cut plus beard").join("")).toBe("Cut plus beard");
+  });
+
+  it("a long offer line wraps at the separator nearest its middle, and every line fits the band", () => {
+    expect(splitLine("Massage thérapeutique · 15% off · Tuesdays")).toEqual(["Massage thérapeutique ·", "15% off · Tuesdays"]);
+    const svg = bandSvg({ name: "Clinique Physio Érable", headline: "Massage thérapeutique · 15% off · Tuesdays", price: "85 $ CA", note: "Normally 100 $ CA" }, "feed");
+    expect((svg.match(/<path [^>]*fill="#ffffff"(?![^>]*fill-opacity)[^>]*>/g) ?? []).length).toBe(2);
+    const short = textPath({ text: "Évaluation en physiothérapie · 15 % de rabais · mardis", cx: 540, y: 100, size: 72, maxWidth: 1000, weight: 700, fill: "#fff" });
+    expect(short.width).toBeLessThanOrEqual(1000);
+    expect(() => textPath({ text: "\u{1F600}", cx: 0, y: 0, size: 20, maxWidth: 100, weight: 700, fill: "#fff" })).toThrow(/no glyph/);
+  });
+});
+
+describe("regenerate without a cutout", () => {
+  it("SAM finding nothing on regenerate leaves the creative unchanged and tells the owner", async () => {
+    const store = await cedarStore();
+    const first = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    await expect(regenerateCreative(deps(store, stub({ segment: EMPTY_SEGMENT })), first.id, { object: "Mug", segment: true, caption: false })).rejects.toMatchObject({
+      status: 422,
+      message: "Couldn't find 'mug' in the photo — try one simple word like clippers.",
+    });
+    expect(await store.getCreative(first.id)).toMatchObject({ cutoutKind: "box", media: { cutout: first.media.cutout } });
   });
 });
 

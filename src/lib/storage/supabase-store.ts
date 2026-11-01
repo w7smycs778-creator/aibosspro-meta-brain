@@ -46,7 +46,7 @@ function check<T>(res: { data: T; error: { message: string; code?: string } | nu
  * and throws on Node 20, which has no native WebSocket; a transport that is
  * never constructed avoids that (Vercel runs Node 24 and is unaffected).
  */
-class NoRealtimeTransport {
+export class NoRealtimeTransport {
   constructor() {
     throw new Error("Supabase realtime is not used by Meta Brain");
   }

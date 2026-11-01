@@ -1,0 +1,1294 @@
+{
+ "scenario": "golden",
+ "recordedAt": "2026-11-01T13:23:39.400Z",
+ "commit": "0f4cc61",
+ "model": "muse-spark-1.3",
+ "toolMode": "native",
+ "clock": "2026-10-29T12:00:00.000Z",
+ "exchanges": [
+  {
+   "seq": 1,
+   "startedAt": "2026-11-01T13:23:24.530Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "Hi! Do you have time for a cut plus beard next Tuesday at 10:00?"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "6415855761adfff89d142a32cd04f55662bab93a91d39522de42b073fad3a4be",
+   "latencyMs": 1501,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "684",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:25 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "3000",
+     "x-ratelimit-remaining-tokens": "4000000",
+     "x-request-id": "29cbe1f8-470d-4400-a98a-e5566c6347d9",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-784d-7112-b64d-2debaa24f02c\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":\"Got it — checking next Tuesday 10:00 for cut plus beard.\",\"refusal\":null,\"tool_calls\":[{\"id\":\"call_efa1fdd6-b3f7-4a7d-8225-d61dedb3c047\",\"type\":\"function\",\"function\":{\"name\":\"check_availability\",\"arguments\":\"{\\\"date\\\":\\\"2026-11-03\\\",\\\"service\\\":\\\"cut_plus_beard\\\"}\"}}],\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539405,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":225,\"prompt_tokens\":1641,\"total_tokens\":1866,\"completion_tokens_details\":{\"reasoning_tokens\":128},\"prompt_tokens_details\":{\"cached_tokens\":1521}}}"
+   },
+   "error": null,
+   "providerRequestId": "29cbe1f8-470d-4400-a98a-e5566c6347d9"
+  },
+  {
+   "seq": 2,
+   "startedAt": "2026-11-01T13:23:26.043Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "Hi! Do you have time for a cut plus beard next Tuesday at 10:00?"
+     },
+     {
+      "role": "assistant",
+      "content": "Got it — checking next Tuesday 10:00 for cut plus beard.",
+      "tool_calls": [
+       {
+        "id": "call_efa1fdd6-b3f7-4a7d-8225-d61dedb3c047",
+        "type": "function",
+        "function": {
+         "name": "check_availability",
+         "arguments": "{\"date\":\"2026-11-03\",\"service\":\"cut_plus_beard\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_efa1fdd6-b3f7-4a7d-8225-d61dedb3c047",
+      "content": "{\"callId\":\"call_efa1fdd6-b3f7-4a7d-8225-d61dedb3c047\",\"name\":\"check_availability\",\"ok\":true,\"output\":{\"date\":\"2026-11-03\",\"weekday\":\"tue\",\"service\":{\"id\":\"cut_plus_beard\",\"name\":\"Cut plus beard\",\"durationMin\":50,\"priceCents\":12000},\"price\":{\"priceCents\":10200,\"currency\":\"ILS\",\"discountId\":\"discount_1\",\"listPriceCents\":12000,\"quote\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"quotes\":{\"en\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"he\":\"תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120\"}},\"slots\":[{\"slot\":\"2026-11-03T09:00\",\"time\":\"09:00\",\"startsAt\":\"2026-11-03T07:00:00.000Z\"},{\"slot\":\"2026-11-03T09:30\",\"time\":\"09:30\",\"startsAt\":\"2026-11-03T07:30:00.000Z\"},{\"slot\":\"2026-11-03T10:00\",\"time\":\"10:00\",\"startsAt\":\"2026-11-03T08:00:00.000Z\"},{\"slot\":\"2026-11-03T10:30\",\"time\":\"10:30\",\"startsAt\":\"2026-11-03T08:30:00.000Z\"},{\"slot\":\"2026-11-03T11:00\",\"time\":\"11:00\",\"startsAt\":\"2026-11-03T09:00:00.000Z\"},{\"slot\":\"2026-11-03T11:30\",\"time\":\"11:30\",\"startsAt\":\"2026-11-03T09:30:00.000Z\"},{\"slot\":\"2026-11-03T12:00\",\"time\":\"12:00\",\"startsAt\":\"2026-11-03T10:00:00.000Z\"},{\"slot\":\"2026-11-03T12:30\",\"time\":\"12:30\",\"startsAt\":\"2026-11-03T10:30:00.000Z\"},{\"slot\":\"2026-11-03T13:00\",\"time\":\"13:00\",\"startsAt\":\"2026-11-03T11:00:00.000Z\"},{\"slot\":\"2026-11-03T13:30\",\"time\":\"13:30\",\"startsAt\":\"2026-11-03T11:30:00.000Z\"},{\"slot\":\"2026-11-03T14:00\",\"time\":\"14:00\",\"startsAt\":\"2026-11-03T12:00:00.000Z\"},{\"slot\":\"2026-11-03T14:30\",\"time\":\"14:30\",\"startsAt\":\"2026-11-03T12:30:00.000Z\"},{\"slot\":\"2026-11-03T15:00\",\"time\":\"15:00\",\"startsAt\":\"2026-11-03T13:00:00.000Z\"},{\"slot\":\"2026-11-03T15:30\",\"time\":\"15:30\",\"startsAt\":\"2026-11-03T13:30:00.000Z\"},{\"slot\":\"2026-11-03T16:00\",\"time\":\"16:00\",\"startsAt\":\"2026-11-03T14:00:00.000Z\"},{\"slot\":\"2026-11-03T16:30\",\"time\":\"16:30\",\"startsAt\":\"2026-11-03T14:30:00.000Z\"},{\"slot\":\"2026-11-03T17:00\",\"time\":\"17:00\",\"startsAt\":\"2026-11-03T15:00:00.000Z\"},{\"slot\":\"2026-11-03T17:30\",\"time\":\"17:30\",\"startsAt\":\"2026-11-03T15:30:00.000Z\"},{\"slot\":\"2026-11-03T18:00\",\"time\":\"18:00\",\"startsAt\":\"2026-11-03T16:00:00.000Z\"}]}}"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "e8180b4542839ecac4f286ec6f83aba67cd6b1a166207cc69c1fcf4c7f3579a7",
+   "latencyMs": 2585,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "564",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:28 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2999",
+     "x-ratelimit-remaining-tokens": "3999655",
+     "x-request-id": "06fbeca7-53de-4eb5-a7a0-dd6654524510",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-8261-72ee-952e-01fdcd843abe\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Yes - Tuesday 10:00 is open, Cut plus beard is ₪102 on Tuesday, normally ₪120.\\n\\nWant me to request it? Just share your name and phone.\",\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539408,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":282,\"prompt_tokens\":2682,\"total_tokens\":2964,\"completion_tokens_details\":{\"reasoning_tokens\":235},\"prompt_tokens_details\":{\"cached_tokens\":1521}}}"
+   },
+   "error": null,
+   "providerRequestId": "06fbeca7-53de-4eb5-a7a0-dd6654524510"
+  },
+  {
+   "seq": 3,
+   "startedAt": "2026-11-01T13:23:28.640Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain.\nLatest availability result: {\"date\":\"2026-11-03\",\"weekday\":\"tue\",\"service\":{\"id\":\"cut_plus_beard\",\"name\":\"Cut plus beard\",\"durationMin\":50,\"priceCents\":12000},\"price\":{\"priceCents\":10200,\"currency\":\"ILS\",\"discountId\":\"discount_1\",\"listPriceCents\":12000,\"quote\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"quotes\":{\"en\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"he\":\"תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120\"}},\"slots\":[{\"slot\":\"2026-11-03T09:00\",\"time\":\"09:00\",\"startsAt\":\"2026-11-03T07:00:00.000Z\"},{\"slot\":\"2026-11-03T09:30\",\"time\":\"09:30\",\"startsAt\":\"2026-11-03T07:30:00.000Z\"},{\"slot\":\"2026-11-03T10:00\",\"time\":\"10:00\",\"startsAt\":\"2026-11-03T08:00:00.000Z\"},{\"slot\":\"2026-11-03T10:30\",\"time\":\"10:30\",\"startsAt\":\"2026-11-03T08:30:00.000Z\"},{\"slot\":\"2026-11-03T11:00\",\"time\":\"11:00\",\"startsAt\":\"2026-11-03T09:00:00.000Z\"},{\"slot\":\"2026-11-03T11:30\",\"time\":\"11:30\",\"startsAt\":\"2026-11-03T09:30:00.000Z\"},{\"slot\":\"2026-11-03T12:00\",\"time\":\"12:00\",\"startsAt\":\"2026-11-03T10:00:00.000Z\"},{\"slot\":\"2026-11-03T12:30\",\"time\":\"12:30\",\"startsAt\":\"2026-11-03T10:30:00.000Z\"},{\"slot\":\"2026-11-03T13:00\",\"time\":\"13:00\",\"startsAt\":\"2026-11-03T11:00:00.000Z\"},{\"slot\":\"2026-11-03T13:30\",\"time\":\"13:30\",\"startsAt\":\"2026-11-03T11:30:00.000Z\"},{\"slot\":\"2026-11-03T14:00\",\"time\":\"14:00\",\"startsAt\":\"2026-11-03T12:00:00.000Z\"},{\"slot\":\"2026-11-03T14:30\",\"time\":\"14:30\",\"startsAt\":\"2026-11-03T12:30:00.000Z\"},{\"slot\":\"2026-11-03T15:00\",\"time\":\"15:00\",\"startsAt\":\"2026-11-03T13:00:00.000Z\"},{\"slot\":\"2026-11-03T15:30\",\"time\":\"15:30\",\"startsAt\":\"2026-11-03T13:30:00.000Z\"},{\"slot\":\"2026-11-03T16:00\",\"time\":\"16:00\",\"startsAt\":\"2026-11-03T14:00:00.000Z\"},{\"slot\":\"2026-11-03T16:30\",\"time\":\"16:30\",\"startsAt\":\"2026-11-03T14:30:00.000Z\"},{\"slot\":\"2026-11-03T17:00\",\"time\":\"17:00\",\"startsAt\":\"2026-11-03T15:00:00.000Z\"},{\"slot\":\"2026-11-03T17:30\",\"time\":\"17:30\",\"startsAt\":\"2026-11-03T15:30:00.000Z\"},{\"slot\":\"2026-11-03T18:00\",\"time\":\"18:00\",\"startsAt\":\"2026-11-03T16:00:00.000Z\"}]}"
+     },
+     {
+      "role": "user",
+      "content": "Hi! Do you have time for a cut plus beard next Tuesday at 10:00?"
+     },
+     {
+      "role": "assistant",
+      "content": "Yes - Tuesday 10:00 is open, Cut plus beard is ₪102 on Tuesday, normally ₪120.\n\nWant me to request it? Just share your name and phone."
+     },
+     {
+      "role": "user",
+      "content": "Great, please book it. My name is Dana, phone 000-0000."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "57452e4a27af01f7c75dabc9862120e37a22f24e7ae950ad2480401771a9f167",
+   "latencyMs": 1385,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "733",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:29 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2998",
+     "x-ratelimit-remaining-tokens": "3998212",
+     "x-request-id": "a4703ff7-050c-4497-9781-26387ed29c7b",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-881f-7382-a9a7-49a379ed5138\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":\"Got it — booking that Tuesday slot for you.\",\"refusal\":null,\"tool_calls\":[{\"id\":\"call_d317cc23-7592-465f-bd00-50bc36334886\",\"type\":\"function\",\"function\":{\"name\":\"request_booking\",\"arguments\":\"{\\\"customer_contact\\\":\\\"000-0000\\\",\\\"customer_name\\\":\\\"Dana\\\",\\\"service\\\":\\\"cut_plus_beard\\\",\\\"slot\\\":\\\"2026-11-03T10:00\\\"}\"}}],\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539409,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":178,\"prompt_tokens\":2595,\"total_tokens\":2773,\"completion_tokens_details\":{\"reasoning_tokens\":50},\"prompt_tokens_details\":{\"cached_tokens\":625}}}"
+   },
+   "error": null,
+   "providerRequestId": "a4703ff7-050c-4497-9781-26387ed29c7b"
+  },
+  {
+   "seq": 4,
+   "startedAt": "2026-11-01T13:23:30.036Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain.\nLatest availability result: {\"date\":\"2026-11-03\",\"weekday\":\"tue\",\"service\":{\"id\":\"cut_plus_beard\",\"name\":\"Cut plus beard\",\"durationMin\":50,\"priceCents\":12000},\"price\":{\"priceCents\":10200,\"currency\":\"ILS\",\"discountId\":\"discount_1\",\"listPriceCents\":12000,\"quote\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"quotes\":{\"en\":\"Cut plus beard is ₪102 on Tuesday, normally ₪120 (Tuesdays cut plus beard is 15% off)\",\"he\":\"תספורת וזקן ב-₪102 ביום שלישי, במקום ₪120\"}},\"slots\":[{\"slot\":\"2026-11-03T09:00\",\"time\":\"09:00\",\"startsAt\":\"2026-11-03T07:00:00.000Z\"},{\"slot\":\"2026-11-03T09:30\",\"time\":\"09:30\",\"startsAt\":\"2026-11-03T07:30:00.000Z\"},{\"slot\":\"2026-11-03T10:00\",\"time\":\"10:00\",\"startsAt\":\"2026-11-03T08:00:00.000Z\"},{\"slot\":\"2026-11-03T10:30\",\"time\":\"10:30\",\"startsAt\":\"2026-11-03T08:30:00.000Z\"},{\"slot\":\"2026-11-03T11:00\",\"time\":\"11:00\",\"startsAt\":\"2026-11-03T09:00:00.000Z\"},{\"slot\":\"2026-11-03T11:30\",\"time\":\"11:30\",\"startsAt\":\"2026-11-03T09:30:00.000Z\"},{\"slot\":\"2026-11-03T12:00\",\"time\":\"12:00\",\"startsAt\":\"2026-11-03T10:00:00.000Z\"},{\"slot\":\"2026-11-03T12:30\",\"time\":\"12:30\",\"startsAt\":\"2026-11-03T10:30:00.000Z\"},{\"slot\":\"2026-11-03T13:00\",\"time\":\"13:00\",\"startsAt\":\"2026-11-03T11:00:00.000Z\"},{\"slot\":\"2026-11-03T13:30\",\"time\":\"13:30\",\"startsAt\":\"2026-11-03T11:30:00.000Z\"},{\"slot\":\"2026-11-03T14:00\",\"time\":\"14:00\",\"startsAt\":\"2026-11-03T12:00:00.000Z\"},{\"slot\":\"2026-11-03T14:30\",\"time\":\"14:30\",\"startsAt\":\"2026-11-03T12:30:00.000Z\"},{\"slot\":\"2026-11-03T15:00\",\"time\":\"15:00\",\"startsAt\":\"2026-11-03T13:00:00.000Z\"},{\"slot\":\"2026-11-03T15:30\",\"time\":\"15:30\",\"startsAt\":\"2026-11-03T13:30:00.000Z\"},{\"slot\":\"2026-11-03T16:00\",\"time\":\"16:00\",\"startsAt\":\"2026-11-03T14:00:00.000Z\"},{\"slot\":\"2026-11-03T16:30\",\"time\":\"16:30\",\"startsAt\":\"2026-11-03T14:30:00.000Z\"},{\"slot\":\"2026-11-03T17:00\",\"time\":\"17:00\",\"startsAt\":\"2026-11-03T15:00:00.000Z\"},{\"slot\":\"2026-11-03T17:30\",\"time\":\"17:30\",\"startsAt\":\"2026-11-03T15:30:00.000Z\"},{\"slot\":\"2026-11-03T18:00\",\"time\":\"18:00\",\"startsAt\":\"2026-11-03T16:00:00.000Z\"}]}"
+     },
+     {
+      "role": "user",
+      "content": "Hi! Do you have time for a cut plus beard next Tuesday at 10:00?"
+     },
+     {
+      "role": "assistant",
+      "content": "Yes - Tuesday 10:00 is open, Cut plus beard is ₪102 on Tuesday, normally ₪120.\n\nWant me to request it? Just share your name and phone."
+     },
+     {
+      "role": "user",
+      "content": "Great, please book it. My name is Dana, phone 000-0000."
+     },
+     {
+      "role": "assistant",
+      "content": "Got it — booking that Tuesday slot for you.",
+      "tool_calls": [
+       {
+        "id": "call_d317cc23-7592-465f-bd00-50bc36334886",
+        "type": "function",
+        "function": {
+         "name": "request_booking",
+         "arguments": "{\"customer_contact\":\"000-0000\",\"customer_name\":\"Dana\",\"service\":\"cut_plus_beard\",\"slot\":\"2026-11-03T10:00\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_d317cc23-7592-465f-bd00-50bc36334886",
+      "content": "{\"callId\":\"call_d317cc23-7592-465f-bd00-50bc36334886\",\"name\":\"request_booking\",\"ok\":true,\"output\":{\"bookingId\":\"625a6e29-cfac-45e1-9cef-2795b16b5f34\",\"approvalId\":\"fd36a71d-0de1-4790-a6a5-b229ea865af3\",\"status\":\"pending_approval\",\"slot\":\"2026-11-03T10:00\",\"when\":\"Tue, Nov 3, 10:00\",\"service\":\"Cut plus beard\",\"priceCents\":10200,\"currency\":\"ILS\",\"discountId\":\"discount_1\"}}"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "d72ea2749a1898cc0332f825c7b5534d0cfda126181e158f6b0d1b2efee84fc2",
+   "latencyMs": 1705,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "563",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:31 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2996",
+     "x-ratelimit-remaining-tokens": "3996064",
+     "x-request-id": "34f430d2-e178-4ea9-89de-e0c2b5610769",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-8e98-7607-9fd0-c2150bf1590b\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Done - I've requested Tuesday 10:00 for Cut plus beard for Dana.\\n\\nIt's pending approval from the owner, I'll let you know once confirmed.\",\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539411,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":183,\"prompt_tokens\":2886,\"total_tokens\":3069,\"completion_tokens_details\":{\"reasoning_tokens\":144},\"prompt_tokens_details\":{\"cached_tokens\":2545}}}"
+   },
+   "error": null,
+   "providerRequestId": "34f430d2-e178-4ea9-89de-e0c2b5610769"
+  },
+  {
+   "seq": 5,
+   "startedAt": "2026-11-01T13:23:31.770Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "כמה עולה תספורת וזקן ביום שלישי?"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "01b4a41f325b332328808f2284357526e96ea0ddd6e03940bd95532ac8920da5",
+   "latencyMs": 2069,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "549",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:33 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2995",
+     "x-ratelimit-remaining-tokens": "3995540",
+     "x-request-id": "f67e87ca-c1b7-4dd2-9706-fc572ca826be",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-96cd-70ee-9a32-ae3fdb2f7408\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"ביום שלישי תספורת וזקן ב-₪102, בדרך כלל ₪120.\\n\\nבוא תשב אצלנו - נסדר אותך.\",\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539413,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":316,\"prompt_tokens\":1639,\"total_tokens\":1955,\"completion_tokens_details\":{\"reasoning_tokens\":268},\"prompt_tokens_details\":{\"cached_tokens\":1521}}}"
+   },
+   "error": null,
+   "providerRequestId": "f67e87ca-c1b7-4dd2-9706-fc572ca826be"
+  },
+  {
+   "seq": 6,
+   "startedAt": "2026-11-01T13:23:33.860Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "Can I walk in at 12:45 this Friday for a beard trim? Please confirm 12:45 works."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "8e9232a5ffab0105bde98a0000dd6f49e00fe29f97a190a7b600b42f65d7122d",
+   "latencyMs": 1635,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "660",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:35 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2995",
+     "x-ratelimit-remaining-tokens": "3995106",
+     "x-request-id": "32e3cc06-a2d0-469a-98bc-1ce8454064ce",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-9d64-70f1-92d7-185029d41bdc\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":\"Got it — checking Friday 12:45 for you.\",\"refusal\":null,\"tool_calls\":[{\"id\":\"call_90c3805b-06ff-460d-8c00-aedae86128d6\",\"type\":\"function\",\"function\":{\"name\":\"check_availability\",\"arguments\":\"{\\\"date\\\":\\\"2026-10-30\\\",\\\"service\\\":\\\"beard_trim\\\"}\"}}],\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539415,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":254,\"prompt_tokens\":1646,\"total_tokens\":1900,\"completion_tokens_details\":{\"reasoning_tokens\":161},\"prompt_tokens_details\":{\"cached_tokens\":0}}}"
+   },
+   "error": null,
+   "providerRequestId": "32e3cc06-a2d0-469a-98bc-1ce8454064ce"
+  },
+  {
+   "seq": 7,
+   "startedAt": "2026-11-01T13:23:35.503Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "Can I walk in at 12:45 this Friday for a beard trim? Please confirm 12:45 works."
+     },
+     {
+      "role": "assistant",
+      "content": "Got it — checking Friday 12:45 for you.",
+      "tool_calls": [
+       {
+        "id": "call_90c3805b-06ff-460d-8c00-aedae86128d6",
+        "type": "function",
+        "function": {
+         "name": "check_availability",
+         "arguments": "{\"date\":\"2026-10-30\",\"service\":\"beard_trim\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_90c3805b-06ff-460d-8c00-aedae86128d6",
+      "content": "{\"callId\":\"call_90c3805b-06ff-460d-8c00-aedae86128d6\",\"name\":\"check_availability\",\"ok\":true,\"output\":{\"date\":\"2026-10-30\",\"weekday\":\"fri\",\"service\":{\"id\":\"beard_trim\",\"name\":\"Beard trim\",\"durationMin\":20,\"priceCents\":5000},\"price\":{\"priceCents\":5000,\"currency\":\"ILS\",\"discountId\":null,\"listPriceCents\":5000,\"quote\":\"Beard trim is ₪50\",\"quotes\":{\"en\":\"Beard trim is ₪50\",\"he\":\"סידור זקן ב-₪50\"}},\"slots\":[{\"slot\":\"2026-10-30T08:00\",\"time\":\"08:00\",\"startsAt\":\"2026-10-30T06:00:00.000Z\"},{\"slot\":\"2026-10-30T08:30\",\"time\":\"08:30\",\"startsAt\":\"2026-10-30T06:30:00.000Z\"},{\"slot\":\"2026-10-30T09:00\",\"time\":\"09:00\",\"startsAt\":\"2026-10-30T07:00:00.000Z\"},{\"slot\":\"2026-10-30T09:30\",\"time\":\"09:30\",\"startsAt\":\"2026-10-30T07:30:00.000Z\"},{\"slot\":\"2026-10-30T10:00\",\"time\":\"10:00\",\"startsAt\":\"2026-10-30T08:00:00.000Z\"},{\"slot\":\"2026-10-30T10:30\",\"time\":\"10:30\",\"startsAt\":\"2026-10-30T08:30:00.000Z\"},{\"slot\":\"2026-10-30T11:00\",\"time\":\"11:00\",\"startsAt\":\"2026-10-30T09:00:00.000Z\"},{\"slot\":\"2026-10-30T11:30\",\"time\":\"11:30\",\"startsAt\":\"2026-10-30T09:30:00.000Z\"},{\"slot\":\"2026-10-30T12:00\",\"time\":\"12:00\",\"startsAt\":\"2026-10-30T10:00:00.000Z\"},{\"slot\":\"2026-10-30T12:30\",\"time\":\"12:30\",\"startsAt\":\"2026-10-30T10:30:00.000Z\"}]}}"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "27a7ec21fcfbb683e7a2e160de5ba8d2c2e8927806b8c28020b112b398252c6b",
+   "latencyMs": 1160,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "615",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:36 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2994",
+     "x-ratelimit-remaining-tokens": "3995106",
+     "x-request-id": "41722de4-9077-4c2f-b657-b7473a855e01",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-a1a9-745b-853b-fa0aad7d463b\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"12:45 isn't open — we close at 13:00 on Friday.\\n\\nFriday 12:30 is open, Beard trim is ₪50. Want me to request 12:30 for you?\\n\\nEarlier Friday times are also open: 12:00, 11:30, 11:00...\",\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539416,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":251,\"prompt_tokens\":2286,\"total_tokens\":2537,\"completion_tokens_details\":{\"reasoning_tokens\":177},\"prompt_tokens_details\":{\"cached_tokens\":1649}}}"
+   },
+   "error": null,
+   "providerRequestId": "41722de4-9077-4c2f-b657-b7473a855e01"
+  },
+  {
+   "seq": 8,
+   "startedAt": "2026-11-01T13:23:36.670Z",
+   "method": "POST",
+   "path": "/v1/chat/completions",
+   "request": {
+    "model": "muse-spark-1.3",
+    "max_completion_tokens": 2048,
+    "reasoning_effort": "low",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are the AI booking assistant for Cedar Street Barbers. Customers know they are talking to an AI.\nToday is 2026-10-29 (thu), time zone Asia/Jerusalem.\nBusiness facts (owner-approved, brain v1). Answer questions about services, prices, durations, discounts and opening hours from these directly; list_services returns the same facts, so there is no need to call it for them.\nServices:\n- Classic cut (Hebrew: תספורת קלאסית): ₪80, 30 min (id classic_cut)\n- Skin fade (Hebrew: סקין פייד): ₪90, 40 min (id skin_fade)\n- Beard trim (Hebrew: סידור זקן): ₪50, 20 min (id beard_trim)\n- Cut plus beard (Hebrew: תספורת וזקן): ₪120, 50 min (id cut_plus_beard)\nOpening hours (Asia/Jerusalem):\n- Sun: 09:00-19:00\n- Mon: 09:00-19:00\n- Tue: 09:00-19:00\n- Wed: 09:00-19:00\n- Thu: 09:00-19:00\n- Fri: 08:00-13:00\n- Sat: closed\nDiscounts:\n- Tuesdays cut plus beard is 15% off (15% off Cut plus beard on Tue; price then: Cut plus beard ₪102 instead of ₪120)\nBooking policy: every booking needs the owner's approval.\nLanguages: English, Hebrew. Reply in the language of the customer's latest message when it is one of these (switch when the customer switches), otherwise in English.\nUse each service's name exactly as listed for the reply's language (the name in brackets for that language, else the listed name). Copy prices exactly as listed; never convert or translate them.\nIn English: times as HH:MM (10:00), days as Monday, Tuesday...\nIn Hebrew: write prices with digits as listed, times as HH:MM (10:00), and days as יום ראשון/שני/שלישי/רביעי/חמישי/שישי or שבת.\nTone: warm, short, relaxed. Example: \"Come in, take a seat - we've got you.\"\nNever invent a service, price, discount or opening hour that is not listed above. Use check_availability for open times.\nOffer only start times returned by check_availability. Request a booking only for a slot it returned.\nWhen you offer a time, state the price for that day from check_availability's price.quotes in the reply's language (price.quote if missing). If it names a discount, give the discounted price and the normal price, and name the day in the same sentence, e.g. \"<day> 10:00 is open, <service> is <discounted price> on <day>, normally <list price>.\" Never calculate a price yourself.\nA booking is never confirmed by you: request_booking creates a pending request that the owner approves.\nIf the customer needs anything the tools cannot do, call request_owner_help.\nCall the tool directly; never say you will check something.\nKeep replies short and plain."
+     },
+     {
+      "role": "user",
+      "content": "Can I walk in at 12:45 this Friday for a beard trim? Please confirm 12:45 works."
+     },
+     {
+      "role": "assistant",
+      "content": "Got it — checking Friday 12:45 for you.",
+      "tool_calls": [
+       {
+        "id": "call_90c3805b-06ff-460d-8c00-aedae86128d6",
+        "type": "function",
+        "function": {
+         "name": "check_availability",
+         "arguments": "{\"date\":\"2026-10-30\",\"service\":\"beard_trim\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_90c3805b-06ff-460d-8c00-aedae86128d6",
+      "content": "{\"callId\":\"call_90c3805b-06ff-460d-8c00-aedae86128d6\",\"name\":\"check_availability\",\"ok\":true,\"output\":{\"date\":\"2026-10-30\",\"weekday\":\"fri\",\"service\":{\"id\":\"beard_trim\",\"name\":\"Beard trim\",\"durationMin\":20,\"priceCents\":5000},\"price\":{\"priceCents\":5000,\"currency\":\"ILS\",\"discountId\":null,\"listPriceCents\":5000,\"quote\":\"Beard trim is ₪50\",\"quotes\":{\"en\":\"Beard trim is ₪50\",\"he\":\"סידור זקן ב-₪50\"}},\"slots\":[{\"slot\":\"2026-10-30T08:00\",\"time\":\"08:00\",\"startsAt\":\"2026-10-30T06:00:00.000Z\"},{\"slot\":\"2026-10-30T08:30\",\"time\":\"08:30\",\"startsAt\":\"2026-10-30T06:30:00.000Z\"},{\"slot\":\"2026-10-30T09:00\",\"time\":\"09:00\",\"startsAt\":\"2026-10-30T07:00:00.000Z\"},{\"slot\":\"2026-10-30T09:30\",\"time\":\"09:30\",\"startsAt\":\"2026-10-30T07:30:00.000Z\"},{\"slot\":\"2026-10-30T10:00\",\"time\":\"10:00\",\"startsAt\":\"2026-10-30T08:00:00.000Z\"},{\"slot\":\"2026-10-30T10:30\",\"time\":\"10:30\",\"startsAt\":\"2026-10-30T08:30:00.000Z\"},{\"slot\":\"2026-10-30T11:00\",\"time\":\"11:00\",\"startsAt\":\"2026-10-30T09:00:00.000Z\"},{\"slot\":\"2026-10-30T11:30\",\"time\":\"11:30\",\"startsAt\":\"2026-10-30T09:30:00.000Z\"},{\"slot\":\"2026-10-30T12:00\",\"time\":\"12:00\",\"startsAt\":\"2026-10-30T10:00:00.000Z\"},{\"slot\":\"2026-10-30T12:30\",\"time\":\"12:30\",\"startsAt\":\"2026-10-30T10:30:00.000Z\"}]}}"
+     },
+     {
+      "role": "assistant",
+      "content": "{\"type\":\"final\",\"text\":\"12:45 isn't open — we close at 13:00 on Friday.\\n\\nFriday 12:30 is open, Beard trim is ₪50. Want me to request 12:30 for you?\\n\\nEarlier Friday times are also open: 12:00, 11:30, 11:00...\"}"
+     },
+     {
+      "role": "user",
+      "content": "Your reply was blocked by the fact check and was not sent: 12:45 (12:45 is neither an opening hour nor in the latest availability result). Use only facts returned by the tools; do not repeat the blocked claims."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "list_services",
+       "description": "Services with duration and price, plus the discount rules, from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_hours",
+       "description": "Weekly opening hours (local time) from the owner-approved brain.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "check_availability",
+       "description": "Open start times for one service on one date, and the price on that date. Offer customers only times returned here; quote price.quotes for the reply's language, which includes any discount for that day.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "date": {
+          "type": "string",
+          "description": "Local date, \"YYYY-MM-DD\"."
+         },
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         }
+        },
+        "required": [
+         "date",
+         "service"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_booking",
+       "description": "Ask the owner to approve a booking for a slot returned by check_availability. Creates a PENDING booking; nothing is confirmed until the owner approves.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "service": {
+          "type": "string",
+          "description": "Service id from list_services."
+         },
+         "slot": {
+          "type": "string",
+          "description": "A \"slot\" value from check_availability, e.g. \"2026-11-05T10:00\"."
+         },
+         "customer_name": {
+          "type": "string"
+         },
+         "customer_contact": {
+          "type": "string",
+          "description": "Phone or email the customer gave."
+         }
+        },
+        "required": [
+         "service",
+         "slot",
+         "customer_name",
+         "customer_contact"
+        ],
+        "additionalProperties": false
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "request_owner_help",
+       "description": "Hand the conversation to the owner when the customer needs something you cannot do with the other tools.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "reason": {
+          "type": "string",
+          "description": "What the customer needs."
+         }
+        },
+        "required": [
+         "reason"
+        ],
+        "additionalProperties": false
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto"
+   },
+   "requestKey": "1c7207fc83c42db577359c7bdf297c79d1702d6d81eda0d12b218bf481397137",
+   "latencyMs": 2712,
+   "response": {
+    "status": 200,
+    "headers": {
+     "access-control-allow-origin": "*",
+     "connection": "keep-alive",
+     "content-length": "557",
+     "content-type": "application/json",
+     "date": "Sun, 01 Nov 2026 13:23:39 GMT",
+     "x-ratelimit-limit-requests": "3000",
+     "x-ratelimit-limit-tokens": "4000000",
+     "x-ratelimit-remaining-requests": "2992",
+     "x-ratelimit-remaining-tokens": "3992318",
+     "x-request-id": "44a58909-b664-4542-9c27-a94a8666680a",
+     "x-route": "model-api-rust"
+    },
+    "body": "{\"id\":\"chatcmpl-01a19747-ac6d-750e-b5a6-305b8551a7c4\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Sorry, that one isn't open — we close Friday at 13:00.\\n\\nFriday 12:30 is open, Beard trim is ₪50. Want me to request it for you?\",\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1793539419,\"model\":\"muse-spark-1.3\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":800,\"prompt_tokens\":2421,\"total_tokens\":3221,\"completion_tokens_details\":{\"reasoning_tokens\":751},\"prompt_tokens_details\":{\"cached_tokens\":2161}}}"
+   },
+   "error": null,
+   "providerRequestId": "44a58909-b664-4542-9c27-a94a8666680a"
+  }
+ ]
+}
