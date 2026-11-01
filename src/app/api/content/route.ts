@@ -2,6 +2,7 @@ import { engineDeps } from "@/lib/engine/deps";
 import { errorResponse, json, ownerOnly, resolveBusiness } from "@/lib/engine/http";
 import { generateCreative } from "@/lib/content/creative";
 import { listOffers } from "@/lib/content/offers";
+import { displayStatus } from "@/lib/engine/creative-qc";
 import { getStore } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -17,7 +18,9 @@ export async function GET(req: Request): Promise<Response> {
   const businessId = await resolveBusiness(store, new URL(req.url).searchParams.get("business"));
   if (businessId instanceof Response) return businessId;
   const brain = await store.getBrain(businessId, { approvedOnly: true });
-  return json({ brainVersion: brain?.version ?? null, offers: brain ? listOffers(brain.brain) : [], creatives: await store.listCreatives(businessId) });
+  // A pending creative whose Wonder QC failed shows as qc_failed; the stored status (and the owner's decision) is unchanged.
+  const creatives = (await store.listCreatives(businessId)).map((c) => ({ ...c, status: displayStatus(c) }));
+  return json({ brainVersion: brain?.version ?? null, offers: brain ? listOffers(brain.brain) : [], creatives });
 }
 
 /** Multipart: photo (jpg/png), offerId, object (what to cut out), businessId (optional). */
@@ -40,7 +43,7 @@ export async function POST(req: Request): Promise<Response> {
       offerId,
       object: typeof object === "string" ? object : undefined,
     });
-    return json({ creative });
+    return json({ creative: { ...creative, status: displayStatus(creative) } });
   } catch (err) {
     return errorResponse(err);
   }

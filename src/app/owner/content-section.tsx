@@ -6,7 +6,9 @@ type Offer = { id: string; label: string };
 type Check = { rule: string; claim: string; pass: boolean; detail?: string };
 type Creative = {
   id: string;
-  status: "pending_approval" | "approved" | "rejected";
+  /** qc_failed: still pending the owner's decision; Wonder's check of the feed failed. */
+  status: "pending_approval" | "qc_failed" | "approved" | "rejected";
+  diagnostics?: { object?: string; qc?: { status: "pass" | "fail" | "not_run"; reasons?: string[]; reason?: string } };
   caption: string;
   captionLog: { attempts?: Array<{ text: string; pass: boolean; checks: Check[] }>; final?: string; ownerEdit?: { pass: boolean | null; checks: Check[] } } | null;
   offer: { label?: string };
@@ -22,7 +24,7 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [creatives, setCreatives] = useState<Creative[]>([]);
   const [offerId, setOfferId] = useState("");
-  const [object, setObject] = useState("main object");
+  const [object, setObject] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,6 +66,23 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
     await refresh();
   }
 
+  async function regenerate(c: Creative) {
+    setBusy(true);
+    setStatus("Regenerating: new cutout, composites, caption and Wonder QC...");
+    try {
+      const res = await fetch(`/api/content/${c.id}/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ object: object.trim() || c.diagnostics?.object || "" }),
+      });
+      const r = await res.json();
+      setStatus(res.ok ? "Regenerated." : `Error: ${r.error}`);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveCaption(id: string) {
     await fetch(`/api/content/${id}/caption`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ caption: captions[id] ?? "" }) });
     await refresh();
@@ -79,7 +98,7 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
             <option key={o.id} value={o.id}>{o.label}</option>
           ))}
         </select>
-        <input className="rounded border px-1" value={object} onChange={(e) => setObject(e.target.value)} placeholder="What to cut out (e.g. clippers)" />
+        <input className="rounded border px-1" value={object} onChange={(e) => setObject(e.target.value)} placeholder="One word to cut out (e.g. clippers)" />
         <button disabled={busy || !photo || !offerId} onClick={generate} className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50">
           {busy ? "Generating..." : "Generate"}
         </button>
@@ -94,6 +113,16 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
               <p className="mb-1 text-gray-600">
                 {c.offer.label} · brain v{c.brainVersion} · cutout: {c.cutoutKind} · scene: {c.sceneKind} · <span className="font-mono">{c.status.toUpperCase()}</span>
               </p>
+              {c.diagnostics?.qc && (
+                <p className={c.diagnostics.qc.status === "fail" ? "mb-1 font-medium text-red-700" : c.diagnostics.qc.status === "pass" ? "mb-1 text-green-700" : "mb-1 text-gray-500"}>
+                  {c.diagnostics.qc.status === "pass"
+                    ? "Wonder QC: PASS"
+                    : c.diagnostics.qc.status === "fail"
+                      ? `Wonder QC: FAIL — ${(c.diagnostics.qc.reasons ?? []).join("; ")}`
+                      : `Wonder QC: not run — ${c.diagnostics.qc.reason ?? ""}`}
+                  <span className="text-gray-500"> (advisory; you decide)</span>
+                </p>
+              )}
               <div className="flex flex-wrap gap-2">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={media(c.id, "feed.png")} alt="Feed 1080x1080" className="h-56 rounded border" />
@@ -103,7 +132,7 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
               <textarea
                 className="mt-2 w-full rounded border p-1"
                 rows={2}
-                disabled={c.status !== "pending_approval"}
+                disabled={c.status !== "pending_approval" && c.status !== "qc_failed"}
                 value={captions[c.id] ?? c.caption}
                 placeholder="No verified caption; write one."
                 onChange={(e) => setCaptions((m) => ({ ...m, [c.id]: e.target.value }))}
@@ -116,8 +145,11 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
                   ))}
                 </ul>
               </details>
-              {c.status === "pending_approval" && (
+              {(c.status === "pending_approval" || c.status === "qc_failed") && (
                 <div className="mt-2 flex gap-2">
+                  {c.status === "qc_failed" && (
+                    <button disabled={busy} onClick={() => regenerate(c)} className="rounded bg-amber-600 px-2 py-1 text-white disabled:opacity-50">Regenerate</button>
+                  )}
                   <button onClick={() => saveCaption(c.id)} className="rounded border px-2 py-1">Save caption</button>
                   <button onClick={() => act(c.id, "approve")} className="rounded bg-green-600 px-2 py-1 text-white">Approve</button>
                   <button onClick={() => act(c.id, "reject")} className="rounded bg-red-600 px-2 py-1 text-white">Reject</button>

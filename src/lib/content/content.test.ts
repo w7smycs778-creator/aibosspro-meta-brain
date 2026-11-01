@@ -22,6 +22,8 @@ import { bandSvg, composite, SIZES, splitLine } from "./composite";
 import { measure, textPath, visualOrder } from "./text";
 import { decideCreative, generateCreative, regenerateCreative, samCopy, scenePrompt } from "./creative";
 import { MEDIA_BUCKET, SupabaseMediaStore } from "./media-store";
+import { displayStatus, runCreativeQc } from "../engine/creative-qc";
+import { estimateMaxCost, VISION_IMAGE_TOKENS } from "../gateway/pricing";
 import { findOffer, listOffers } from "./offers";
 import { DEMO_BUSINESSES } from "../storage/seed-demo";
 import { buildCutout, parseSegmentation } from "./segment";
@@ -102,12 +104,17 @@ const BOX_SEGMENT = "<0f>0<|box;x1=100;y1=150;x2=300;y2=450;w=400;h=600|><|mask;
 /** What SAM returned for the owner photos it found nothing in (2026-11-01): an empty message. */
 const EMPTY_SEGMENT = JSON.stringify([{ type: "message", id: "msg_synthetic", role: "assistant", content: [{ type: "output_text", text: "", annotations: [], logprobs: [] }], status: "completed" }]);
 
-function stub(opts: { segment?: string | null; image?: "ok" | "fail"; imageBytes?: Buffer; headers?: Record<string, string>; captions?: string[] }): Dispatcher & { calls: ModelCall[] } {
+const QC_PASS = { price_readable: true, expected_object_present: true, garbled_or_tofu_text: false, overall_pass: true, reasons: [] };
+
+function stub(opts: { segment?: string | null; image?: "ok" | "fail"; imageBytes?: Buffer; headers?: Record<string, string>; captions?: string[]; qc?: unknown }): Dispatcher & { calls: ModelCall[] } {
   const captions = [...(opts.captions ?? ["Cut plus beard is ₪102 every Tuesday. Book your chair today."])];
   const d = {
     calls: [] as ModelCall[],
     async dispatch(call: ModelCall): Promise<DispatchResult> {
       d.calls.push(call);
+      if (call.kind === "vision") {
+        return { ok: true, status: 200, retryable: false, units: { kind: "vision", promptTokens: 1_200, cachedTokens: 0, completionTokens: 90 }, output: JSON.stringify(opts.qc ?? QC_PASS) };
+      }
       if (call.kind === "segment") return { ok: true, status: 200, retryable: false, units: { kind: "segment", images: 1 }, output: opts.segment === undefined ? BOX_SEGMENT : (opts.segment ?? undefined) };
       if (call.kind === "image") {
         if (opts.image === "fail") return { ok: false, status: 500, retryable: false, units: null, errorBody: "boom" };
@@ -333,10 +340,12 @@ describe("creatives", () => {
     for (const file of [c.media.original, c.media.cutout!, c.media.scene!, c.media.feed, c.media.story]) expect(existsSync(file)).toBe(true);
     expect(await sharp(c.media.feed).metadata()).toMatchObject({ width: 1080, height: 1080 });
     expect(await sharp(c.media.story).metadata()).toMatchObject({ width: 1080, height: 1920 });
-    expect(d.calls.map((x) => x.kind)).toEqual(["segment", "image", "chat"]);
+    expect(d.calls.map((x) => x.kind)).toEqual(["segment", "image", "chat", "vision"]);
+    expect(d.calls[3]).toMatchObject({ model: "muse-wonder-1.0", mimeType: "image/jpeg", jsonSchema: { name: "creative_qc" } });
+    expect(c.diagnostics.qc).toMatchObject({ status: "pass", model: "muse-wonder-1.0" });
     expect(d.calls[0]).toMatchObject({ model: "sam-3.1", prompt: "clippers", mimeType: "image/jpeg" });
     expect(d.calls[1]).toMatchObject({ model: "muse-image-1.0", n: 1, size: "1024x1024" });
-    expect((await store.listSpend()).map((r) => r.model)).toEqual(["sam-3.1", "muse-image-1.0", MOCK_MODEL]);
+    expect((await store.listSpend()).map((r) => r.model)).toEqual(["sam-3.1", "muse-image-1.0", MOCK_MODEL, "muse-wonder-1.0"]);
 
     expect(await decideCreative(store, c.id, "approved")).toMatchObject({ changed: true, creative: { status: "approved" } });
     expect(await decideCreative(store, c.id, "approved")).toMatchObject({ changed: false, creative: { status: "approved" } });
@@ -426,7 +435,7 @@ describe("creatives", () => {
 
     expect(c).toMatchObject({ id: first.id, offerId: OFFER_ID, brainVersion: 2, status: "pending_approval", cutoutKind: "box", sceneKind: "generated" });
     expect(c.caption).toBe("Cut plus beard is ₪102 every Tuesday. Book your chair today.");
-    expect(d.calls.map((x) => x.kind)).toEqual(["segment", "chat"]); // no new image call
+    expect(d.calls.map((x) => x.kind)).toEqual(["segment", "vision", "chat"]); // no new image call; Wonder QC again
     expect(d.calls[0]).toMatchObject({ prompt: "hair clipper", mimeType: "image/jpeg" });
     expect(readFileSync(first.media.scene!).equals(sceneBefore)).toBe(true);
     expect(c.diagnostics).toMatchObject({ object: "hair clipper" });
@@ -593,6 +602,45 @@ describe("regenerate without a cutout", () => {
       message: "Couldn't find 'mug' in the photo — try one simple word like clippers.",
     });
     expect(await store.getCreative(first.id)).toMatchObject({ cutoutKind: "box", media: { cutout: first.media.cutout } });
+  });
+});
+
+describe("Wonder creative QC", () => {
+  it("PASS: the verdict is stored on the creative, the status stays pending, and the call is in the ledger", async () => {
+    const store = await cedarStore();
+    const c = await generateCreative(deps(store, stub({})), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(c.diagnostics.qc).toMatchObject({ status: "pass", reasons: [], answer: QC_PASS });
+    expect(displayStatus(c)).toBe("pending_approval");
+    const row = (await store.listSpend()).find((r) => r.model === "muse-wonder-1.0")!;
+    expect(row).toMatchObject({ state: "settled", tokensIn: 1_200, tokensOut: 90 });
+    expect(row.settledNano).toBe(1_200 * 4_000 + 90 * 20_000);
+    expect(JSON.parse(readFileSync(c.media.manifest!, "utf8")).qc).toMatchObject({ status: "pass" });
+  });
+
+  it("FAIL: reasons are shown, the creative shows as qc_failed, and the owner can still approve it", async () => {
+    const store = await cedarStore();
+    const qc = { price_readable: false, expected_object_present: true, garbled_or_tofu_text: true, overall_pass: true, reasons: ["price drawn as empty boxes"] };
+    const c = await generateCreative(deps(store, stub({ qc })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(c.status).toBe("pending_approval");
+    expect(c.diagnostics.qc).toMatchObject({ status: "fail", reasons: ["price drawn as empty boxes"], modelOverallDisagrees: true });
+    expect(displayStatus(c)).toBe("qc_failed");
+    expect(await decideCreative(store, c.id, "approved")).toMatchObject({ changed: true, creative: { status: "approved" } });
+    expect(displayStatus((await store.getCreative(c.id))!)).toBe("approved");
+  });
+
+  it("an unusable answer or a failed call is recorded as not run, never as a pass", async () => {
+    const store = await cedarStore();
+    const bad = await generateCreative(deps(store, stub({ qc: { overall_pass: true } })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, object: "clippers", mediaDir: dir() });
+    expect(bad.diagnostics.qc).toMatchObject({ status: "not_run", reason: "answer did not match the schema" });
+    expect(displayStatus(bad)).toBe("pending_approval");
+    const failing: Dispatcher = { dispatch: async () => ({ ok: false, status: 503, retryable: false, units: null, errorBody: "busy" }) };
+    const gw = deps(store, failing).gateway!;
+    expect(await runCreativeQc(gw, { feed: await testPhoto(), priceText: "₪102", object: "clippers", businessId: SEED_BUSINESS_ID })).toMatchObject({ status: "not_run", reason: "call failed (status 503)" });
+  });
+
+  it("reserves a bounded cost: the image allowance plus the output budget at Wonder's prices", () => {
+    const est = estimateMaxCost({ kind: "vision", model: "muse-wonder-1.0", prompt: "x", image: new Uint8Array(10), mimeType: "image/jpeg", maxOutputTokens: 1_024 });
+    expect(est).toBe((1 + 16 + VISION_IMAGE_TOKENS) * 4_000 + 1_024 * 20_000);
   });
 });
 

@@ -114,6 +114,36 @@ export class MetaDispatcher implements Dispatcher {
           units: { kind: "segment", images: 1 },
         }));
       }
+
+      case "vision": {
+        // Chat Completions image input: an image_url part whose url is a data: URL (dev.meta.ai/docs/image-understanding).
+        const dataUrl = `data:${call.mimeType};base64,${Buffer.from(call.image).toString("base64")}`;
+        return this.json(`${baseUrl}/chat/completions`, auth, {
+          model: call.model,
+          max_completion_tokens: call.maxOutputTokens,
+          ...(call.reasoningEffort && { reasoning_effort: call.reasoningEffort }),
+          ...(call.jsonSchema && { response_format: { type: "json_schema", json_schema: call.jsonSchema } }),
+          messages: [{ role: "user", content: [{ type: "text", text: call.prompt }, { type: "image_url", image_url: { url: dataUrl } }] }],
+        }, (body) => {
+          const choice = body?.choices?.[0];
+          const usage = body?.usage;
+          const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens;
+          return {
+            output: choice?.message?.content ?? undefined,
+            units: usage
+              ? {
+                  kind: "vision",
+                  promptTokens: num(usage.prompt_tokens),
+                  cachedTokens: num(usage.prompt_tokens_details?.cached_tokens),
+                  completionTokens: num(usage.completion_tokens),
+                  ...(typeof reasoning === "number" && { reasoningTokens: num(reasoning) }),
+                }
+              : null,
+            finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined,
+            usageRaw: usage,
+          };
+        });
+      }
     }
   }
 
