@@ -274,8 +274,10 @@ export class LocalStore implements Storage {
     return (await this.getBusiness(input.id))!;
   }
 
-  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
-    const res = this.db.prepare("update businesses set whatsapp_default_mode = ? where id = ?").run(settings.whatsappDefaultMode, id);
+  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode?: ConversationMode; name?: string }): Promise<Business> {
+    const res = this.db
+      .prepare("update businesses set whatsapp_default_mode = coalesce(?, whatsapp_default_mode), name = coalesce(?, name) where id = ?")
+      .run(settings.whatsappDefaultMode ?? null, settings.name ?? null, id);
     if (res.changes === 0) throw new Error(`business ${id} not found`);
     return (await this.getBusiness(id))!;
   }

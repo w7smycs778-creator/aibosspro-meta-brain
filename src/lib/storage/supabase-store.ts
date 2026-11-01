@@ -130,8 +130,12 @@ export class SupabaseStore implements Storage {
     return (await this.getBusiness(input.id))!;
   }
 
-  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode: ConversationMode }): Promise<Business> {
-    check(await this.db.from("businesses").update({ whatsapp_default_mode: settings.whatsappDefaultMode }).eq("id", id), "updateBusinessSettings");
+  async updateBusinessSettings(id: string, settings: { whatsappDefaultMode?: ConversationMode; name?: string }): Promise<Business> {
+    const patch = {
+      ...(settings.whatsappDefaultMode && { whatsapp_default_mode: settings.whatsappDefaultMode }),
+      ...(settings.name && { name: settings.name }),
+    };
+    if (Object.keys(patch).length) check(await this.db.from("businesses").update(patch).eq("id", id), "updateBusinessSettings");
     const b = await this.getBusiness(id);
     if (!b) throw new Error(`business ${id} not found`);
     return b;
