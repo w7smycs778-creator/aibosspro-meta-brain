@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useDirty, useLivePoll } from "./use-live-poll";
 
 type Offer = { id: string; label: string };
 type Check = { rule: string; claim: string; pass: boolean; detail?: string };
@@ -29,6 +30,8 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [captions, setCaptions] = useState<Record<string, string>>({});
+  /** The object text last sent with Generate; it no longer counts as unsaved. */
+  const [submittedObject, setSubmittedObject] = useState("");
 
   const refresh = useCallback(async () => {
     if (!businessId) return;
@@ -41,6 +44,24 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Live refresh; a failed poll keeps the list as is.
+  const pollContent = useCallback(async () => {
+    if (!businessId) return;
+    const res = await fetch(`/api/content?business=${encodeURIComponent(businessId)}`);
+    if (!res.ok) return;
+    const r = await res.json();
+    setOffers(r.offers ?? []);
+    setCreatives(r.creatives ?? []);
+    setOfferId((cur) => ((r.offers ?? []).some((o: Offer) => o.id === cur) ? cur : r.offers?.[0]?.id || ""));
+  }, [businessId]);
+  useLivePoll(pollContent);
+  // Only captions that can still be saved count; a decided creative's textarea is disabled.
+  useDirty(
+    "content:captions",
+    Object.entries(captions).some(([id, text]) => creatives.some((c) => c.id === id && (c.status === "pending_approval" || c.status === "qc_failed") && c.caption !== text)),
+  );
+  useDirty("content:object", object.trim() !== "" && object.trim() !== submittedObject);
 
   async function generate() {
     if (!photo || !offerId) return;
@@ -55,6 +76,7 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
       const res = await fetch("/api/content", { method: "POST", body: form });
       const r = await res.json();
       setStatus(res.ok ? "Creative ready for approval." : `Error: ${r.error}`);
+      setSubmittedObject(object.trim());
       await refresh();
     } finally {
       setBusy(false);
@@ -77,6 +99,7 @@ export function ContentSection({ businessId }: { businessId: string | null }) {
       });
       const r = await res.json();
       setStatus(res.ok ? "Regenerated." : `Error: ${r.error}`);
+      setSubmittedObject(object.trim());
       await refresh();
     } finally {
       setBusy(false);

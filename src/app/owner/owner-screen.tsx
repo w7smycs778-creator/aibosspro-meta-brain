@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useDirty, useLivePoll } from "./use-live-poll";
 import { ContentSection } from "./content-section";
 
 type Mode = "AUTO" | "HUMAN" | "PAUSED";
@@ -48,6 +49,16 @@ export function OwnerScreen() {
     if (businessId === null) return;
     setState(await (await fetch(`/api/owner/state${businessId ? `?business=${encodeURIComponent(businessId)}` : ""}`)).json());
   }, [businessId]);
+
+  // Live refresh: its own fetch, so it never re-runs the session reset below; a failed poll keeps the page as is.
+  const pollState = useCallback(async () => {
+    if (businessId === null) return;
+    const res = await fetch(`/api/owner/state${businessId ? `?business=${encodeURIComponent(businessId)}` : ""}`);
+    if (res.ok) setState(await res.json());
+  }, [businessId]);
+  useLivePoll(pollState);
+  useDirty("owner:panel-draft", draft.trim() !== "");
+  useDirty("owner:reply-drafts", Object.values(ownerDrafts).some((v) => v.trim() !== ""));
 
   useEffect(() => {
     setSessionId(`panel-${crypto.randomUUID()}`);
