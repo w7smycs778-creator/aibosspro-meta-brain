@@ -77,7 +77,7 @@ The spend ledger is SQLite: `./data/demo/meta-brain.sqlite` for `npm run demo` (
 
 ## What to click (web app)
 
-Four demo businesses, one per supported language. Pick one with the business selector at the top of `/owner`.
+Four demo businesses, one per supported language. Pick one with the business selector at the top of `/owner`. The table shows the seeded demo brains (what `npm run judge` and `npm run demo` start with).
 
 | Business | Languages | Zone, currency | Discount rule (price computed by code) |
 |---|---|---|---|
@@ -85,6 +85,8 @@ Four demo businesses, one per supported language. Pick one with the business sel
 | סטודיו אופק פילאטיס (Tel Aviv pilates) | Hebrew, English | Asia/Jerusalem, ₪ | שיעור פרטי 20% off on Mondays: ₪240 instead of ₪300 |
 | Bahía Azul Auto Detailing (Miami) | Spanish, English | America/New_York, $ | Detallado completo $30 off on Wednesdays: $145 instead of $175 |
 | Clinique Physio Érable (Montreal) | French, English | America/Toronto, $ CA | Massage thérapeutique 15% off on Tuesdays: 85 $ CA instead of 100 $ CA |
+
+On the hosted deploy, the Pilates brain was re-onboarded by voice on 2026-11-01 and approved as v2: "Pilates studio in Tel Aviv", English only, private session ₪250 (60 min), group class ₪90 (60 min), first class 10% off. Hosted Pilates replies follow v2, not the seeded row above.
 
 1. **Customer panel: `/owner`, right column.** `Do you have Tuesday 10:00 for a cut plus beard?` quotes the Tuesday price computed by code; `Book it, I'm Dana 000-0000` creates a PENDING booking and an owner approval. Try Hebrew, Spanish or French on the matching business. Open "Tool trace" under a reply for each tool call and the verifier's verdict.
 2. **Booking approval: `/owner`, "Pending approvals".** Approve (the booking becomes CONFIRMED and a confirmation in the customer's language is sent; on WhatsApp, if the customer's 24-hour window has closed, it is queued and sent when they write again) or Reject.
