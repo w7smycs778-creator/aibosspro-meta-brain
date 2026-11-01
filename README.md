@@ -88,7 +88,7 @@ Four demo businesses, one per supported language. Pick one with the business sel
 
 1. **Customer panel: `/owner`, right column.** `Do you have Tuesday 10:00 for a cut plus beard?` quotes the Tuesday price computed by code; `Book it, I'm Dana 000-0000` creates a PENDING booking and an owner approval. Try Hebrew, Spanish or French on the matching business. Open "Tool trace" under a reply for each tool call and the verifier's verdict.
 2. **Booking approval: `/owner`, "Pending approvals".** Approve (the booking becomes CONFIRMED and the customer gets a confirmation in their language) or Reject.
-3. **Content: `/owner`, "Content".** Choose `fixtures/demo/beard-oil.jpg` (drawn from shapes by `scripts/make-sample-photo.ts`, not a real photo), pick an offer, type one simple word for the object to cut out (`bottle`), Generate (three model calls). If SAM finds nothing, you are told so and nothing is generated.
+3. **Content: `/owner`, "Content".** Choose `fixtures/demo/beard-oil.jpg` (drawn from shapes by `scripts/make-sample-photo.ts`, not a real photo), pick an offer, type one simple word for the object to cut out (`bottle`), Generate (four model calls: SAM 3.1, Muse Image, Muse Spark caption, Muse Wonder QC). If SAM finds nothing, you are told so and nothing is generated. The post shows "Wonder QC: PASS" or "Wonder QC: FAIL — reasons"; you still approve or reject.
 4. **Onboarding: `/onboard`** (optional; the seeded brains are approved). Type or record how the business works, review the draft, approve.
 
 Locally `/owner` and `/onboard` need no login. Hosted, they return 404 unless you open `/owner?token=<OWNER_ACCESS_TOKEN>` once (an httpOnly cookie) or send the token in the Authorization header.
@@ -103,7 +103,7 @@ It is pattern-based, not a proof. It catches what it can tie to the brain; phras
 
 - Every model call goes through one gateway (`src/lib/gateway/`) that reserves the worst-case cost in the durable ledger before dispatch and settles the real cost after. One file (`meta-dispatcher.ts`) talks to the Meta API; a test fails if any other source file does.
 - `MODEL_SPEND_HARD_CAP_USD` is required and can never exceed $130. `LIVE_CREDITS_VERIFIED` is a human switch; until it is `true` no request reaches Meta and customer messages go to the owner.
-- Measured in the recorded golden run: $0.0013 to $0.0040 per model call, $0.0017 to $0.0093 per customer turn (n=8 calls, 4 turns); a content post about $0.016 to $0.019 (3 calls).
+- Measured in the recorded golden run: $0.0013 to $0.0040 per model call, $0.0017 to $0.0093 per customer turn (n=8 calls, 4 turns); a content post about $0.03 with Wonder QC (4 calls, n=1; Wonder $0.0114 of it).
 
 ## Meta models used
 
@@ -112,9 +112,10 @@ It is pattern-based, not a proof. It catches what it can tie to the brain; phras
 | `muse-spark-1.3` | `src/lib/engine/conversation-service.ts`, `onboarding.ts`, `src/lib/content/caption.ts` | Customer conversation with tool calls, brain extraction from the owner's words, post captions |
 | `muse-voice-transcribe-1.0` | `src/lib/engine/onboarding.ts` | Voice onboarding (language bias from the business's languages) |
 | `sam-3.1` | `src/lib/content/creative.ts` (parsing in `segment.ts`) | Cuts the product out of the owner's photo (mask decoded with Meta's `@meta-sam/parser`) |
+| `muse-wonder-1.0` | `src/lib/engine/creative-qc.ts` | Creative QC: looks at the finished feed export (as a 768 px JPEG) and answers a strict JSON schema: price readable, expected product present, garbled or empty-box text. Advisory: a failed check shows the post as `qc_failed` with a Regenerate button; only the owner approves. |
 | `muse-image-1.0` | `src/lib/content/creative.ts` | Background scene, no text in the image. The output is kept byte-identical with its response headers; it carries IPTC `trainedAlgorithmicMedia`, and the exports say `compositeWithTrainedAlgorithmicMedia` (they add the owner's photo and printed text). Each creative's `manifest.json` records what Meta returned and what was preserved. |
 
-No other model provider is used anywhere in the product.
+Five Meta models; no other model provider is used anywhere in the product.
 
 ## WhatsApp (optional, live path)
 

@@ -47,6 +47,16 @@ The block in step 5: the customer named 12:45, which is neither an opening bound
 - Offline, exactly this run: `npm run demo -- --replay` (no API key needed; any request that differs from the recording stops the run).
 - Live, with a changed input: `npm run demo -- --golden --time 11:00` (needs a model API key; capped by DEMO_CAP_USD, default $0.30). It asserts the invariants above, not the wording: the slot is held pending approval, the booked price equals `priceOn` (code-computed), owner approval confirms it, the Hebrew reply is a verified model reply, every final reply has a verifier verdict, and the verifier blocks at least one reply.
 
+## Wonder creative QC (hosted content run)
+
+Record: [`provenance/wonder-qc-hosted-2026-11-01.json`](wonder-qc-hosted-2026-11-01.json). Read from the hosted store (Supabase) after one owner-page generation on production deploy dpl_9awS6qesS71s8z92j31CtsR6NefX (commit 90c5df6). Fictional business; bundled synthetic photo fixtures/demo/beard-oil.jpg.
+
+| Step | Input | API request | Raw response | Tool result | Verifier verdict | Ledger | Booking state | Video |
+|---|---|---|---|---|---|---|---|---|
+| QC | feed export of creative `cce5b692` (768px JPEG of the feed export), object "bottle" | `/v1/chat/completions` muse-wonder-1.0, image_url part, json_schema `creative_qc` | {"reasons":[],"overall_pass":true,"price_readable":true,"garbled_or_tofu_text":false,"expected_object_present":true} | – | QC PASS (advisory; decided by code from the three checks; the owner approves) | reserved $0.058708, settled $0.011380; in 940, out 381 (reasoning 336) | creative pending_approval | TBD |
+
+Whole content run: 4 calls (sam-3.1, muse-image-1.0, muse-spark-1.3, muse-wonder-1.0), $0.029642 (n=1). The provider request id for this call was not kept in the hosted record.
+
 ## Image and audio outputs
 
 None in this scenario. The hosted content run of 2026-11-01 (creative `f6066875`, Supabase bucket `creative-media`, not in the repo) kept the Muse Image output byte-identical with its response headers and `x-request-id`; its manifest is described in PROVENANCE.md. The Spanish/French Voice Transcribe check is in PROVENANCE.md (local research notes are not committed).
