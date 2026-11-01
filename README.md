@@ -8,11 +8,12 @@ Every AI reply is labelled as AI. Nothing is booked or published without the own
 
 ## 5-minute setup (clean clone)
 
-You need git and Node 20.12 or newer (`node -v`; `.nvmrc` pins 20). macOS or Linux.
+You need git and Node 22.12 or newer, or Node 20.19 or newer (some dependencies refuse older versions). macOS or Linux. Check with `node -v`; with nvm, `nvm install && nvm use` inside the repository picks the version in `.nvmrc`.
 
 ```bash
 cd ~                       # anywhere in your home directory, NOT /tmp (see "Where the ledger lives")
 git clone https://github.com/w7smycs778-creator/aibosspro-meta-brain.git meta-brain && cd meta-brain
+nvm install && nvm use     # only if `node -v` is older than the versions above
 npm ci
 cp .env.example .env
 npm run demo               # REPLAY: the recorded golden scenario, offline, no API key needed

@@ -7,9 +7,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-major=$(node -p 'process.versions.node.split(".")[0]')
-if [ "$major" -lt 20 ]; then
-  echo "Node 20 or newer is required (found $(node -v)). With nvm: nvm install 20 && nvm use 20" >&2
+# Dependencies need Node ^20.19 or >=22.12.
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=12)||(a===20&&b>=19)?0:1)'; then
+  echo "Node 22.12+ or 20.19+ is required (found $(node -v)). With nvm, in this directory: nvm install && nvm use" >&2
   exit 1
 fi
 
