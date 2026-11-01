@@ -11,7 +11,7 @@ type Params = { params: Promise<{ version: string }> };
 
 /** Saves owner edits to a draft: { brain }. */
 export async function PUT(req: Request, { params }: Params): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const version = Number((await params).version);
   const brain = (await readJson(req))?.brain as BusinessBrain | undefined;
@@ -24,8 +24,8 @@ export async function PUT(req: Request, { params }: Params): Promise<Response> {
 }
 
 /** Discards a draft. */
-export async function DELETE(_req: Request, { params }: Params): Promise<Response> {
-  const blocked = ownerOnly();
+export async function DELETE(req: Request, { params }: Params): Promise<Response> {
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const version = Number((await params).version);
   if (!Number.isInteger(version)) return json({ error: "version is required" }, 400);

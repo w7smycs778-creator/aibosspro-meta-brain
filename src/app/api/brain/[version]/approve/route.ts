@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** Approves a draft, optionally with final edits: { brain? }. The engine uses it from the next message. */
 export async function POST(req: Request, { params }: { params: Promise<{ version: string }> }): Promise<Response> {
-  const blocked = ownerOnly();
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   const version = Number((await params).version);
   if (!Number.isInteger(version)) return json({ error: "version is required" }, 400);

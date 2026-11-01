@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Every brain version, newest first, with its source (transcript or typed text). */
-export async function GET(): Promise<Response> {
-  const blocked = ownerOnly();
+export async function GET(req: Request): Promise<Response> {
+  const blocked = ownerOnly(req);
   if (blocked) return blocked;
   return json({ versions: await (await getStore()).listBrainVersions(SEED_BUSINESS_ID) });
 }

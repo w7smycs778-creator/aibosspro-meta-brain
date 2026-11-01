@@ -162,6 +162,23 @@ describe("verifier: Spanish", () => {
   it("a promise to check later is a protocol leak", () => {
     expect(failed("Déjame revisar y te aviso luego.", f).map((c) => c.rule)).toContain("protocol_leak");
   });
+
+  it("claims in first person singular and plural are blocked; an interjection is not a negation; questions are offers", () => {
+    for (const claim of [
+      "no hay problema, tu cita está confirmada",
+      "No hay problema, tu cita está confirmada.",
+      "Te agendé el miércoles a las 10:00.",
+      "Anoté tu cita del miércoles.",
+      "Registré tu cita para el miércoles.",
+      "Te reservamos el miércoles a las 10:00.",
+      "Confirmamos tu cita del miércoles.",
+    ]) {
+      expect(failed(claim, f), claim).toContainEqual(expect.objectContaining({ rule: "booking_claim" }));
+    }
+    for (const ok of ["¿Lo reservamos para el miércoles?", "Todavía no te agendé; el dueño tiene que aprobarla."]) {
+      expect(failed(ok, f), ok).toEqual([]);
+    }
+  });
 });
 
 describe("verifier: French", () => {
@@ -198,6 +215,15 @@ describe("verifier: French", () => {
   it("a promise to check later is a protocol leak", () => {
     expect(failed("Je vais vérifier les disponibilités.", f).map((c) => c.rule)).toContain("protocol_leak");
   });
+
+  it("noté, enregistré, validé are claims; \"dès\" negates only as \"dès que\"", () => {
+    for (const claim of ["C'est noté pour mardi à 10h.", "Votre rendez-vous est enregistré.", "Votre séance est validée.", "Dès 10h, votre massage est réservé.", "Pas de souci, c'est réservé."]) {
+      expect(failed(claim, f), claim).toContainEqual(expect.objectContaining({ rule: "booking_claim" }));
+    }
+    for (const ok of ["disponible dès 10h", "Le massage est disponible dès 10h.", "Il sera enregistré dès que la clinique l'aura validé.", "Votre rendez-vous n'est pas encore noté.", "Prenez note de l'adresse."]) {
+      expect(failed(ok, f), ok).toEqual([]);
+    }
+  });
 });
 
 describe("verifier: Hebrew business", () => {
@@ -207,6 +233,15 @@ describe("verifier: Hebrew business", () => {
     expect(failed("שיעור פרטי ב-₪240 ביום שלישי.", f)).toEqual([expect.objectContaining({ rule: "discount_condition" })]);
     expect(failed("השיעור הפרטי שלך אושר!", f)).toEqual([expect.objectContaining({ rule: "booking_claim" })]);
     expect(failed("התור שלך נקבע ליום שני.", f)).toEqual([expect.objectContaining({ rule: "booking_claim" })]);
+  });
+
+  it("first person singular and plural claims are blocked; negated ones pass", () => {
+    for (const claim of ["אישרתי לך את השיעור ביום שני.", "אישרנו את התור שלך.", "רשמתי אותך ליום שני ב-10:00.", "סגרתי לך שיעור פרטי ביום שני.", "קבענו לך ליום שני.", "שמרנו לך מקום ביום שני."]) {
+      expect(failed(claim, f), claim).toContainEqual(expect.objectContaining({ rule: "booking_claim" }));
+    }
+    for (const ok of ["עדיין לא אישרנו את התור, הבעלים צריך לאשר.", "לא רשמתי אותך עדיין."]) {
+      expect(failed(ok, f), ok).toEqual([]);
+    }
   });
 });
 

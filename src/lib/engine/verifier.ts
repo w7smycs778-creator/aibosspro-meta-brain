@@ -79,19 +79,29 @@ const CONDITION_AFTER = /^\W*\b(until|once|after|when|by the owner|pending|yet)\
  * Hebrew booking claims ("confirmed", "set", "I booked", "reserved"), with an
  * optional ו/ה prefix. Hebrew letters are not \w, so whole words are bounded by \p{L}.
  */
-const HE_CLAIM_RE = /(?<!\p{L})[וה]?(?:אושר|אושרה|מאושר|מאושרת|נקבע|נקבעה|קבעתי|שמרתי|שמור|שמורה|שריינתי|משוריין|משוריינת|הזמנתי)(?!\p{L})/gu;
+const HE_CLAIM_RE = /(?<!\p{L})[וה]?(?:אושר|אושרה|מאושר|מאושרת|אישרתי|אישרנו|נקבע|נקבעה|קבעתי|קבענו|שמרתי|שמרנו|שמור|שמורה|שריינתי|משוריין|משוריינת|הזמנתי|רשמתי|רשמנו|סגרתי|סגרנו)(?!\p{L})/gu;
 /** Not, not yet, still, waiting, after, when, until, if, only, will be approved; any word starting כש ("when"). */
 const HE_NEGATION_BEFORE =
   /(?<!\p{L})(?:ו?(?:לא|טרם|עדיין|ממתין|ממתינה|ממתינים|מחכה|מחכים|בהמתנה|אחרי|לאחר|כאשר|ברגע|עד|אם|רק|יאשר|תאשר|שיאשר|שתאשר|יאושר|תאושר|שיאושר|שתאושר)|כש\p{L}*)(?!\p{L})/u;
 const HE_CONDITION_AFTER = /^[\s,:–-]*(?:עד|אחרי|לאחר|כש|ברגע|רק|בכפוף|ממתין|בהמתנה|לאישור)/u;
-/** Spanish claims: confirmado/a, reservado/a, agendado/a, apartado/a, "te confirmo", "te reservé" ("¿te reserve?" is an offer). */
-const ES_CLAIM_RE = /(?<!\p{L})(?:confirmad[oa]s?|reservad[oa]s?|agendad[oa]s?|apartad[oa]s?|confirmo|reservé)(?!\p{L})/giu;
+/**
+ * Spanish claims: confirmado/a, reservado/a, agendado/a, apartado/a, "te confirmo", "te reservé", agendé,
+ * anoté, registré, reservamos, confirmamos ("¿te reserve?" and any claim inside ¿...? are offers).
+ */
+const ES_CLAIM_RE = /(?<!\p{L})(?:confirmad[oa]s?|reservad[oa]s?|agendad[oa]s?|apartad[oa]s?|confirmo|reservé|agendé|anoté|registré|reservamos|confirmamos)(?!\p{L})/giu;
 const ES_NEGATION_BEFORE = /(?<!\p{L})(?:no|todav[íi]a|a[úu]n|pendiente|cuando|hasta|despu[ée]s|una vez|en cuanto|antes|s[óo]lo)(?!\p{L})/iu;
 const ES_CONDITION_AFTER = /^[\s,:–-]*(?:cuando|hasta|una vez|en cuanto|despu[ée]s|tras|pendiente|por (?:el|la) (?:due[ñn]o|due[ñn]a|propietari[oa]|negocio|equipo))(?!\p{L})/iu;
-/** French claims: confirmé(e)(s), réservé(e)(s). "Je réserve?" and "je confirme?" are offers, not claims. */
-const FR_CLAIM_RE = /(?<!\p{L})(?:confirmée?s?|r[ée]servée?s?)(?!\p{L})/giu;
-const FR_NEGATION_BEFORE = /(?<!\p{L})(?:ne|pas|non|encore|quand|lorsque|d[èe]s|une fois|apr[èe]s|avant|attente|seulement)(?!\p{L})|(?<!\p{L})(?:n|lorsqu|jusqu)'/iu;
-const FR_CONDITION_AFTER = /^[\s,:–-]*(?:quand|lorsque|lorsqu'|d[èe]s|une fois|apr[èe]s|par (?:le|la) (?:propri[ée]taire|clinique|[ée]quipe)|en attente|sous r[ée]serve)(?!\p{L})/iu;
+/**
+ * French claims: confirmé(e)(s), réservé(e)(s), noté(e)(s), enregistré(e)(s), validé(e)(s); the accent is
+ * required on the last three ("note", "valide" are other words). "Je réserve?" and "je confirme?" are offers.
+ */
+const FR_CLAIM_RE = /(?<!\p{L})(?:confirmée?s?|r[ée]servée?s?|notée?s?|enregistrée?s?|validée?s?)(?!\p{L})/giu;
+/** "dès" only as "dès que"/"dès qu'" ("dès 10h" is a time). */
+const FR_NEGATION_BEFORE = /(?<!\p{L})(?:ne|pas|non|encore|quand|lorsque|d[èe]s que|une fois|apr[èe]s|avant|attente|seulement)(?!\p{L})|(?<!\p{L})(?:n|lorsqu|jusqu|d[èe]s qu)'/iu;
+const FR_CONDITION_AFTER = /^[\s,:–-]*(?:quand|lorsque|lorsqu'|d[èe]s qu(?:e|')|une fois|apr[èe]s|par (?:le|la) (?:propri[ée]taire|clinique|[ée]quipe)|en attente|sous r[ée]serve)(?!\p{L})/iu;
+
+/** "No problem"-style interjections: their "no"/"pas" negates nothing that follows. */
+const NOT_A_NEGATION = /(?<!\p{L})(?:no (?:hay )?problema|no problem|no worries|no te preocupes|pas de (?:probl[èe]me|souci)|no(?=\s*[,!]))(?!\p{L})/giu;
 
 function escape(re: string): string {
   return re.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -357,9 +367,11 @@ export function verifyText(text: string, facts: Facts): Verdict {
     ...[...text.matchAll(FR_CLAIM_RE)].map((m) => ({ m, negation: FR_NEGATION_BEFORE, condition: FR_CONDITION_AFTER })),
   ];
   for (const { m, negation, condition } of claims) {
-    const before = text.slice(Math.max(0, m.index! - CLAIM_WINDOW), m.index!);
+    const before = text.slice(Math.max(0, m.index! - CLAIM_WINDOW), m.index!).replace(NOT_A_NEGATION, " ");
     const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 30);
-    if (negation.test(before) || condition.test(after)) {
+    // A claim inside an open Spanish question (¿...) is an offer.
+    const inQuestion = /¿[^?]*$/.test(text.slice(0, m.index!));
+    if (negation.test(before) || condition.test(after) || inQuestion) {
       checks.push({ rule: "booking_claim", claim: m[0], pass: true, detail: "negated or conditional" });
       continue;
     }
