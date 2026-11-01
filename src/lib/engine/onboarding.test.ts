@@ -13,6 +13,7 @@ import type { DispatchResult, Dispatcher, ModelCall } from "../gateway/types";
 import { upgradeBrain } from "../storage/brain";
 import { LocalStore } from "../storage/local-store";
 import { SEED_BRAIN, SEED_BUSINESS_ID } from "../storage/seed";
+import { DEMO_BUSINESSES } from "../storage/seed-demo";
 import { handleInbound } from "./conversation-service";
 import { DEMO_CLOCK } from "./demo-script";
 import type { EngineDeps } from "./deps";
@@ -221,6 +222,31 @@ describe("voice onboarding", () => {
     const rows = await store.listSpend();
     expect(rows.map((r) => r.model)).toEqual([TRANSCRIBE_MODEL, MOCK_MODEL]);
     expect(rows.every((r) => r.state === "settled")).toBe(true);
+  });
+
+  it("biases transcription to the business's declared languages", async () => {
+    const store = await seeded();
+    const { id, brain } = DEMO_BUSINESSES.find((b) => b.id === "biz_demo_detailing_mia")!;
+    await store.ensureBusiness({ id, name: brain.name });
+    await store.approveBrainVersion(id, (await store.addBrainVersion(id, brain)).version);
+    const stub = voiceStub();
+    await transcribeVoiceNote(deps(store, stub), { businessId: id, wav: wav(16_000), audioDir: join(tempDir(), "audio") });
+    expect(stub.calls[0]).toMatchObject({ kind: "transcribe", languageBias: ["Spanish", "English"] });
+  });
+
+  it("falls back to all four supported languages when the business declares none of them, or has no brain", async () => {
+    const store = await seeded();
+    await store.ensureBusiness({ id: "biz_x", name: "X" });
+    await store.ensureBusiness({ id: "biz_y", name: "Y" });
+    await store.approveBrainVersion("biz_y", (await store.addBrainVersion("biz_y", { ...SEED_BRAIN, languages: ["Klingon"] })).version);
+    const stub = voiceStub();
+    for (const businessId of ["biz_x", "biz_y"]) {
+      await transcribeVoiceNote(deps(store, stub), { businessId, wav: wav(16_000), audioDir: join(tempDir(), "audio") });
+    }
+    expect(stub.calls.map((c) => (c as { languageBias?: string[] }).languageBias)).toEqual([
+      ["English", "Hebrew", "Spanish", "French"],
+      ["English", "Hebrew", "Spanish", "French"],
+    ]);
   });
 
   it("the upload route reaches the transcription client (stubbed) and stores the audio under STORAGE_DIR/audio", async () => {

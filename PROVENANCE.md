@@ -160,7 +160,7 @@ Mock tests only; no model calls; ./data not reset or modified.
 ## Third-party
 
 ## Day 2 close — 2026-10-28 (channel live)
-- Permanent System User token (no expiry) replaces temp token; sees test number 555-175-0081.
+- 60-day USER token (expires 2026-12-27) replaces the temp token; sees test number 555-175-0081. Permanent System User token pending, to replace it before expiry. (Corrected 2026-11-01; this line first said "Permanent System User token (no expiry)".)
 - WhatsApp round-trip confirmed on real phone: inbound "test" -> brain echo reply, signature-checked, 3:21pm Israel.
 - Webhook registered + active, messages field subscribed, Vercel production redeployed.
 - Gate met: live channel, deployed app, judge-accessible URL.

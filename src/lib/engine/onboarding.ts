@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { WEEKDAY_KEYS } from "../storage/brain";
 import type { BrainSource, BrainVersion, BusinessBrain, DiscountRule, Service, Storage, Weekday } from "../storage/types";
 import { ENGINE_REASONING_EFFORT, type EngineDeps } from "./deps";
+import { langCode, langName, SUPPORTED_LANGS, type Lang } from "./i18n";
 
 export const TRANSCRIBE_MODEL = "muse-voice-transcribe-1.0";
 export const EXTRACTION_MAX_OUTPUT_TOKENS = 2_048;
@@ -52,6 +53,17 @@ export function parseWav(bytes: Uint8Array): WavInfo {
   throw new OnboardingError("WAV has no fmt and data chunks", 400);
 }
 
+/**
+ * Voice Transcribe languageBias (language names) from the business's declared
+ * languages: approved brain, else the latest draft. All four supported
+ * languages when it declares none of them or has no brain yet.
+ */
+export async function transcribeLanguages(store: Storage, businessId: string): Promise<string[]> {
+  const v = (await store.getBrain(businessId, { approvedOnly: true })) ?? (await store.getBrain(businessId));
+  const declared = [...new Set((v?.brain.languages ?? []).map(langCode).filter((l): l is Lang => l !== null))];
+  return (declared.length ? declared : SUPPORTED_LANGS).map(langName);
+}
+
 /** Saves the voice note under audioDir, transcribes it, returns the transcript and the stored path. */
 export async function transcribeVoiceNote(
   deps: EngineDeps,
@@ -66,7 +78,7 @@ export async function transcribeVoiceNote(
     kind: "transcribe",
     model: TRANSCRIBE_MODEL,
     audio: input.wav,
-    languageBias: ["English", "Hebrew"],
+    languageBias: await transcribeLanguages(deps.store, input.businessId),
     businessId: input.businessId,
   });
   if (r.outcome === "denied") throw new OnboardingError(`transcription refused: ${r.reason}: ${r.detail}`, 503, { audioPath });
