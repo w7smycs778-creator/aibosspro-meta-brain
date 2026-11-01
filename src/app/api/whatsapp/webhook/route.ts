@@ -67,7 +67,7 @@ export async function POST(req: Request): Promise<Response> {
           // The engine sends the reply itself, after a last takeover check, and records the delivery.
           console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome, delivery: result.delivery ?? null });
         } catch (err) {
-          console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name });
+          console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name, message: (err as Error).message });
         }
       }
     });
