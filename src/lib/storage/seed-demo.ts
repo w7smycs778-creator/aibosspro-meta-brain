@@ -115,7 +115,12 @@ export const PHYSIO_BRAIN: BusinessBrain = {
     },
   ],
   bookingPolicy: { approvalRequired: true },
-  doNotSay: [],
+  doNotSay: [
+    "any diagnosis or guess at what a condition is (diagnostic)",
+    "treatment or medication advice (traitement, médicaments)",
+    "exercises, stretches or self-care instructions (exercices, étirements)",
+  ],
+  category: "health",
 };
 
 /** Every demo business, Cedar Street Barbers first (it keeps the original demo id). */

@@ -4,11 +4,11 @@
 import { runToolLoop, type ProposedStep, type ToolLoopResult } from "../gateway/tool-loop";
 import type { ChatMessage } from "../gateway/types";
 import { isDemoBusiness } from "../storage/seed-demo";
-import type { BusinessBrain, Channel, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
+import type { BrainVersion, BusinessBrain, Channel, Conversation, ConversationMode, ConversationState, Storage, Turn } from "../storage/types";
 import { ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, disclosureFor, engineDeps, type EngineDeps } from "./deps";
-import { brainLangs, detectLanguage, STRINGS } from "./i18n";
+import { brainLangs, detectLanguage, STRINGS, type Lang } from "./i18n";
 import { brainFacts } from "./brain-prompt";
-import { channelDeliver, deliverAndRecord } from "./delivery";
+import { channelDeliver, deliverAndRecord, deliverQueued } from "./delivery";
 import { resumeConversation } from "./resume";
 import { localDate, weekdayOf } from "./time";
 import { ENGINE_TOOLS } from "./tools";
@@ -67,29 +67,40 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
   if (!(await store.claimEvent(`engine:${input.channel}`, input.externalEventId))) {
     return { duplicate: true, conversationId: null, replyText: null, state: null, mode: null, outcome: "duplicate", trace: [] };
   }
-  const brainVersion = await store.getBrain(input.businessId, { approvedOnly: true });
-  if (!brainVersion) throw new Error(`business ${input.businessId} has no approved brain; run store:reset`);
-  const primary = brainLangs(brainVersion.brain)[0];
+  // Until the customer turn is stored, a failure leaves nothing behind: the claim is released so a
+  // redelivery is processed. After that, the claim stays (resume finishes the half-done turn).
+  let brainVersion: BrainVersion, primary: Lang, conversation: Conversation, history: Turn[], customerTurn: Turn;
+  try {
+    const approved = await store.getBrain(input.businessId, { approvedOnly: true });
+    if (!approved) throw new Error(`business ${input.businessId} has no approved brain; run store:reset`);
+    brainVersion = approved;
+    primary = brainLangs(brainVersion.brain)[0];
 
-  const conversation =
-    (await store.findConversation(input.businessId, input.channel, input.externalConversationId)) ??
-    (await store.createConversation({
-      businessId: input.businessId,
-      channel: input.channel,
-      externalId: input.externalConversationId,
-      customerRef: input.senderId,
-      mode: await initialMode(store, input),
-    }));
-  // Finish anything a crash left half done before taking the new message.
-  await resumeConversation({ store, deliver, now: d.now }, conversation.id);
-  const history = await store.listTurns(conversation.id);
-  const customerTurn = await store.appendTurn({
-    conversationId: conversation.id,
-    role: "customer",
-    content: input.text,
-    checkpoint: { kind: "customer", channel: input.channel, eventId: input.externalEventId },
-  });
+    conversation =
+      (await store.findConversation(input.businessId, input.channel, input.externalConversationId)) ??
+      (await store.createConversation({
+        businessId: input.businessId,
+        channel: input.channel,
+        externalId: input.externalConversationId,
+        customerRef: input.senderId,
+        mode: await initialMode(store, input),
+      }));
+    // Finish anything a crash left half done before taking the new message.
+    await resumeConversation({ store, deliver, now: d.now }, conversation.id);
+    history = await store.listTurns(conversation.id);
+    customerTurn = await store.appendTurn({
+      conversationId: conversation.id,
+      role: "customer",
+      content: input.text,
+      checkpoint: { kind: "customer", channel: input.channel, eventId: input.externalEventId },
+    });
+  } catch (err) {
+    await store.releaseEvent(`engine:${input.channel}`, input.externalEventId).catch(() => {});
+    throw Object.assign(err as Error, { retryable: true });
+  }
   await store.updateConversation(conversation.id, {});
+  // The customer's message reopens the 24-hour window: replies queued while it was closed go out first.
+  await deliverQueued(store, deliver, conversation).catch((err) => console.error("queued delivery failed", { error: (err as Error).message }));
 
   let outcome: InboundResult["outcome"];
   let replyText: string | null = null;

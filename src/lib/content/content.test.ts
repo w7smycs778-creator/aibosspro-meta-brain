@@ -1,7 +1,8 @@
 // Content engine and the WhatsApp default-mode setting. Stub dispatchers only.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleInbound } from "../engine/conversation-service";
@@ -19,6 +20,7 @@ import type { BusinessBrain } from "../storage/types";
 import { verifyCaption } from "./caption";
 import { bandSvg, composite, SIZES } from "./composite";
 import { decideCreative, generateCreative, regenerateCreative, samCopy, scenePrompt } from "./creative";
+import { MEDIA_BUCKET, SupabaseMediaStore } from "./media-store";
 import { findOffer, listOffers } from "./offers";
 import { buildCutout, parseSegmentation } from "./segment";
 
@@ -93,7 +95,7 @@ function rectAlpha(): Uint8Array {
 }
 
 /** Answers segment, image and chat calls; any part can be made to fail. */
-function stub(opts: { segment?: string | null; image?: "ok" | "fail"; captions?: string[] }): Dispatcher & { calls: ModelCall[] } {
+function stub(opts: { segment?: string | null; image?: "ok" | "fail"; imageBytes?: Buffer; headers?: Record<string, string>; captions?: string[] }): Dispatcher & { calls: ModelCall[] } {
   const captions = [...(opts.captions ?? ["Cut plus beard is ₪102 every Tuesday. Book your chair today."])];
   const d = {
     calls: [] as ModelCall[],
@@ -102,8 +104,8 @@ function stub(opts: { segment?: string | null; image?: "ok" | "fail"; captions?:
       if (call.kind === "segment") return { ok: true, status: 200, retryable: false, units: { kind: "segment", images: 1 }, output: opts.segment ?? undefined };
       if (call.kind === "image") {
         if (opts.image === "fail") return { ok: false, status: 500, retryable: false, units: null, errorBody: "boom" };
-        const png = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).png().toBuffer();
-        return { ok: true, status: 200, retryable: false, units: { kind: "image", images: 1 }, output: png.toString("base64") };
+        const png = opts.imageBytes ?? (await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).png().toBuffer());
+        return { ok: true, status: 200, retryable: false, units: { kind: "image", images: 1 }, output: png.toString("base64"), ...(opts.headers && { responseHeaders: opts.headers }) };
       }
       return { ok: true, status: 200, retryable: false, units: { kind: "chat", promptTokens: 50, cachedTokens: 0, completionTokens: 30 }, output: captions.shift() ?? "" };
     },
@@ -422,3 +424,70 @@ describe("WhatsApp default mode", () => {
     expect(await handleInbound({ ...wa("panel-x", "p1"), channel: "panel" }, deps(store, new MockModelClient([{ text: "Hi." }])))).toMatchObject({ mode: "AUTO" });
   });
 });
+
+const XMP = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:source>synthetic-test-generator</dc:source></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>';
+
+/** In-memory stand-in for the Supabase Storage client surface the media store uses. */
+function fakeSupabaseStorage() {
+  const files = new Map<string, Buffer>();
+  const buckets = new Set<string>();
+  const storage = {
+    getBucket: async (name: string) => ({ data: buckets.has(name) ? { name } : null, error: null }),
+    createBucket: async (name: string, opts: { public: boolean }) => {
+      buckets.add(name);
+      expect(opts.public).toBe(false);
+      return { data: { name }, error: null };
+    },
+    from: (bucket: string) => ({
+      upload: async (path: string, body: Buffer) => (files.set(`${bucket}/${path}`, Buffer.from(body)), { data: { path }, error: null }),
+      download: async (path: string) => {
+        const b = files.get(`${bucket}/${path}`);
+        return b ? { data: new Blob([new Uint8Array(b)]), error: null } : { data: null, error: { message: "not found" } };
+      },
+      createSignedUrl: async (path: string, seconds: number) => ({ data: { signedUrl: `https://storage.example/sign/${bucket}/${path}?expires=${seconds}` }, error: null }),
+    }),
+  };
+  return { files, buckets, client: { storage } as never };
+}
+
+describe("media provenance and hosted media", () => {
+  it("keeps the Muse output bytes untouched, records headers and metadata, and carries XMP only when the export has it", async () => {
+    const store = await cedarStore();
+    const raw = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#8a5a3b" } }).withXmp(XMP).png().toBuffer();
+    const c = await generateCreative(deps(store, stub({ segment: null, imageBytes: raw, headers: { "x-request-id": "req_synthetic_42", "content-type": "application/json" } })), {
+      businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir(),
+    });
+    expect(readFileSync(c.media.sceneOriginal!).equals(raw)).toBe(true);
+    const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(manifest.museImage).toMatchObject({ requested: true, status: 200, providerRequestId: "req_synthetic_42", responseHeaders: { "x-request-id": "req_synthetic_42" } });
+    expect(manifest.museImage.original).toMatchObject({ format: "png", xmp: true, exif: false, c2pa: false, sha256: createHash("sha256").update(raw).digest("hex") });
+    expect(manifest.preserved.feed).toEqual({ xmp: true, notCarried: [] });
+    expect((await sharp(c.media.feed).metadata()).xmp?.toString()).toContain("synthetic-test-generator");
+    for (const a of manifest.assets) expect(createHash("sha256").update(readFileSync(join(dirname(c.media.feed), a.file))).digest("hex")).toBe(a.sha256);
+  });
+
+  it("claims nothing that was not received: no headers, no metadata", async () => {
+    const store = await cedarStore();
+    const c = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, mediaDir: dir() });
+    const manifest = JSON.parse(readFileSync(c.media.manifest!, "utf8"));
+    expect(manifest.museImage).toMatchObject({ responseHeaders: null, providerRequestId: null });
+    expect(manifest.museImage.original).toMatchObject({ xmp: false, exif: false, iptc: false, c2pa: false });
+    expect(manifest.preserved.feed).toEqual({ xmp: false, notCarried: [] });
+  });
+
+  it("with the Supabase store, every file goes to the private bucket and nothing is written to disk", async () => {
+    const store = await cedarStore();
+    const fake = fakeSupabaseStorage();
+    const media = new SupabaseMediaStore(fake.client);
+    const localDir = dir();
+    const c = await generateCreative(deps(store, stub({ segment: null })), { businessId: SEED_BUSINESS_ID, photo: await testPhoto(), offerId: OFFER_ID, media, mediaDir: localDir });
+    expect(fake.buckets.has(MEDIA_BUCKET)).toBe(true);
+    for (const r of [c.media.original, c.media.feed, c.media.story, c.media.scene!, c.media.sceneOriginal!, c.media.manifest!]) {
+      expect(r.startsWith(`supabase://${MEDIA_BUCKET}/`)).toBe(true);
+      expect(fake.files.has(r.slice("supabase://".length))).toBe(true);
+    }
+    expect(readdirSync(localDir)).toEqual([]);
+    expect(await media.signedUrl(c.media.feed)).toMatch(/^https:\/\/storage\.example\/sign\/creative-media\/.+feed\.png\?expires=300$/);
+  });
+});
+

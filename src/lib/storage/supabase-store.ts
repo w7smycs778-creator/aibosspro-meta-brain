@@ -567,6 +567,10 @@ export class SupabaseStore implements Storage {
     ) as Row[];
     return rows.length === 1;
   }
+
+  async releaseEvent(source: string, eventId: string): Promise<void> {
+    check(await this.db.from("processed_events").delete().eq("source", source).eq("event_id", eventId), "releaseEvent");
+  }
 }
 
 function toCreative(r: Row): Creative {

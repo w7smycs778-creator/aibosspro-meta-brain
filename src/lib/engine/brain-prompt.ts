@@ -65,6 +65,11 @@ export function brainFacts(brain: BusinessBrain, version: number): string {
     ...langs.map((l) => CONVENTIONS[l]),
     ...(brain.tone.adjectives.length ? [`Tone: ${brain.tone.adjectives.join(", ")}.${brain.tone.example ? ` Example: "${brain.tone.example}"` : ""}`] : []),
     ...(brain.doNotSay.length ? [`Never say: ${brain.doNotSay.join("; ")}.`] : []),
+    ...(brain.category === "health"
+      ? [
+          "This is a health business: your role is administrative only (services, prices, hours, booking). Never diagnose, never guess at a condition, never give treatment, medication, exercise or self-care advice. When a customer describes symptoms, say the practitioner will assess them at an appointment and offer to book one.",
+        ]
+      : []),
   ];
   return lines.join("\n");
 }

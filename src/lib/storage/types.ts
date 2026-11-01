@@ -47,6 +47,8 @@ export type BusinessBrain = {
   bookingPolicy: { approvalRequired: true };
   /** Phrases or topics the assistant must not use. */
   doNotSay: string[];
+  /** "health": the assistant stays administrative (no diagnosis, treatment or exercise advice). */
+  category?: "health";
 };
 
 export type Business = {
@@ -71,8 +73,13 @@ export type Creative = {
   caption: string;
   /** Verifier log for the caption (attempts, checks, final verdict). */
   captionLog: Record<string, unknown> | null;
-  /** Absolute local paths under ./data/media/. */
-  media: { original: string; cutout: string | null; scene: string | null; feed: string; story: string };
+  /**
+   * Media refs: absolute paths under ./data/media/ (local store) or
+   * "supabase://<bucket>/<id>/<file>" (hosted). sceneOriginal is the Muse Image
+   * output as returned; manifest records what was received and preserved.
+   * Both are absent on creatives made before 2026-11-01.
+   */
+  media: { original: string; cutout: string | null; scene: string | null; feed: string; story: string; sceneOriginal?: string | null; manifest?: string | null };
   cutoutKind: "mask" | "box" | "unavailable";
   sceneKind: "generated" | "flat";
   /** Model output shapes and fallback reasons, for review. */
@@ -308,4 +315,6 @@ export interface Storage extends SpendLedgerStore {
 
   /** Records an event id; true the first time, false on every repeat. */
   claimEvent(source: string, eventId: string): Promise<boolean>;
+  /** Undoes a claim, so a message whose processing failed before anything was recorded can be processed again. */
+  releaseEvent(source: string, eventId: string): Promise<void>;
 }

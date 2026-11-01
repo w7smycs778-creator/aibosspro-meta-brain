@@ -10,7 +10,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
 // stays clean without an allowlist entry for this file.
 const AUTH_SCHEME = ["Bear", "er"].join("");
 
-export type SendResult = { ok: boolean; status: number };
+export type SendResult = { ok: boolean; status: number; messageId?: string; errorCode?: number; outOfWindow?: boolean };
+
+/** Graph error 131047: more than 24 hours since the customer's last message, so free-form text is refused. */
+export const OUT_OF_WINDOW_CODE = 131047;
 
 export class WhatsAppConfigError extends Error {}
 
@@ -37,7 +40,12 @@ export async function sendText(
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  // Drain the body so the connection is released; its content is not logged.
-  await res.text().catch(() => "");
-  return { ok: res.ok, status: res.status };
+  // Only the message id or the error code is read from the body; the body itself is not logged.
+  const reply = await res.json().catch(() => null);
+  if (res.ok) {
+    const messageId = reply?.messages?.[0]?.id;
+    return { ok: true, status: res.status, ...(typeof messageId === "string" && { messageId }) };
+  }
+  const errorCode = typeof reply?.error?.code === "number" ? reply.error.code : undefined;
+  return { ok: false, status: res.status, ...(errorCode !== undefined && { errorCode }), ...(errorCode === OUT_OF_WINDOW_CODE && { outOfWindow: true }) };
 }

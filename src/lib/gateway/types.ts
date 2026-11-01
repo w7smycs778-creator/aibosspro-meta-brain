@@ -104,6 +104,8 @@ export type DispatchResult = {
   /** The provider's usage object as returned, for the ledger. */
   usageRaw?: unknown;
   errorBody?: string;
+  /** Response headers as received (set-cookie dropped), lower-case names. */
+  responseHeaders?: Record<string, string>;
 };
 
 export interface Dispatcher {
@@ -140,6 +142,8 @@ export type GatewayResult =
       protocolError?: string;
       finishReason?: string;
       errorBody?: string;
+      /** Headers of the last attempt's response, when the provider answered. */
+      responseHeaders?: Record<string, string>;
       attempts: AttemptRecord[];
       reservedNano: NanoUsd;
       settledNano: NanoUsd;

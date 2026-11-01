@@ -210,6 +210,41 @@ describe("live-credit guard", () => {
   });
 });
 
+describe("dispatcher timeouts and response headers", () => {
+  const env = { MODEL_API_BASE_URL: "https://api.meta.ai/v1", MODEL_API_KEY: "test-placeholder", LIVE_CREDITS_VERIFIED: "true", STORAGE_BACKEND: "supabase", MODEL_SPEND_HARD_CAP_USD: "130" };
+  const probe = { backend: "supabase" as const, ping: async () => {}, isDurable: async () => true };
+  const tools: NonNullable<ChatCall["tools"]> = [{ name: "list_services", description: "x", parameters: { type: "object", properties: {} } }];
+
+  it("a customer chat turn gives up after 30 s, once, billed at the reservation and not retried", async () => {
+    const timeouts: number[] = [];
+    const fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => {
+      // AbortSignal.timeout's delay is not readable; record that a signal was passed and fail as it would.
+      timeouts.push(init?.signal ? 1 : 0);
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    });
+    const ledger = storeLedger(limits());
+    const gw = new SpendGateway({ ledger, dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch, probe) });
+    const r = await gw.call({ ...chat(), tools });
+    expect(r).toMatchObject({ outcome: "failed", status: 0, errorBody: "timeout after 30000 ms" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(timeouts).toEqual([1]);
+    expect((await ledger.snapshot()).settledNano).toBe(estimateMaxCost({ ...chat(), tools }));
+  });
+
+  it("returns the provider's response headers without cookies", async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ created: 1, data: [{ b64_json: "AAAA" }] }), {
+      status: 200,
+      headers: { "x-request-id": "req_synthetic_1", "Content-Type": "application/json", "Set-Cookie": "s=1" },
+    }));
+    const gw = new SpendGateway({ ledger: storeLedger(limits()), dispatcher: new MetaDispatcher(env, fetchSpy as unknown as typeof fetch, probe) });
+    const r = await gw.call(image());
+    expect(r.outcome).toBe("ok");
+    if (r.outcome === "denied") throw new Error("denied");
+    expect(r.responseHeaders).toMatchObject({ "x-request-id": "req_synthetic_1", "content-type": "application/json" });
+    expect(r.responseHeaders).not.toHaveProperty("set-cookie");
+  });
+});
+
 describe("gateway isolation", () => {
   it("only meta-dispatcher.ts touches the Meta API, its key or server-side fetch", () => {
     const root = join(__dirname, "..", "..");

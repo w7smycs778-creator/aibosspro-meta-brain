@@ -67,7 +67,10 @@ export async function POST(req: Request): Promise<Response> {
           // The engine sends the reply itself, after a last takeover check, and records the delivery.
           console.log("whatsapp engine", { id: m.id, from4: last4(m.from), outcome: result.outcome, delivery: result.delivery ?? null });
         } catch (err) {
-          console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name, message: (err as Error).message });
+          const retryable = (err as { retryable?: boolean }).retryable === true;
+          console.error("whatsapp reply failed", { id: m.id, from4: last4(m.from), error: (err as Error).name, message: (err as Error).message, retryable });
+          // Nothing was recorded for this message: release the claim so a redelivery is processed.
+          if (retryable) await (await getStore()).releaseEvent("whatsapp", m.id).catch(() => {});
         }
       }
     });

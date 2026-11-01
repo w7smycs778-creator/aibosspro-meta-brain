@@ -15,7 +15,8 @@ import { SEED_BRAIN, SEED_BUSINESS_ID } from "../storage/seed";
 import { handleInbound } from "./conversation-service";
 import { runDemo, traceLines } from "./demo-run";
 import { DEMO_CLOCK, DEMO_DATE } from "./demo-script";
-import { decideBooking, setMode } from "./owner";
+import { deliverAndRecord } from "./delivery";
+import { decideBooking, ownerState, setMode } from "./owner";
 import { availability, type AvailabilityResult } from "./tools";
 import { verifyText, verifyToolCall, type Facts } from "./verifier";
 
@@ -343,5 +344,60 @@ describe("tool protocol", () => {
     expect(sent.tool_choice).toBe("auto");
     expect(sent.response_format).toBeUndefined();
     expect(r.toolCalls).toEqual([{ id: "t1", name: "get_hours", arguments: {} }]);
+  });
+});
+
+describe("inbound dedupe releases a message that failed before it was recorded", () => {
+  it("a throw before the customer turn is stored leaves the event retryable; the retry is processed once", async () => {
+    const s = store();
+    const { deps: d } = deps(s, [final("Hello from the engine.")]);
+    // No approved brain yet: handleInbound throws before recording anything.
+    await expect(handleInbound(inbound("hi", "evt-retry"), d)).rejects.toMatchObject({ retryable: true });
+    expect(await s.listConversations(SEED_BUSINESS_ID)).toEqual([]);
+    await s.reset(SEED_BRAIN);
+    const r = await handleInbound(inbound("hi", "evt-retry"), d);
+    expect(r).toMatchObject({ duplicate: false, outcome: "final" });
+    const again = await handleInbound(inbound("hi", "evt-retry"), d);
+    expect(again.duplicate).toBe(true);
+    const turns = await s.listTurns(r.conversationId!);
+    expect(turns.filter((t) => t.role === "customer")).toHaveLength(1);
+  });
+});
+
+describe("outbound message ids and out-of-window queueing", () => {
+  it("stores the WhatsApp message id of a sent reply on its outbound_result turn", async () => {
+    const s = store();
+    await s.reset(SEED_BRAIN);
+    const { deps: d } = deps(s, [final("Hi, we're open until 19:00.")]);
+    const deliver = vi.fn(async () => ({ ok: true, status: 200, channel: "whatsapp" as const, messageId: "wamid.synthetic.1" }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const r = await handleInbound(inbound("hi", "evt-wamid", "whatsapp", "15550001111"), { ...d, deliver });
+    const result = r.trace.find((t) => t.checkpoint?.kind === "outbound_result")!;
+    expect(result.checkpoint).toMatchObject({ status: "sent", messageId: "wamid.synthetic.1" });
+  });
+
+  it("an owner decision that fails outside the 24-hour window is queued, flagged for the owner, and sent on the customer's next message", async () => {
+    const s = store();
+    await s.reset(SEED_BRAIN);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { deps: d } = deps(s, [final("Hello!"), final("You're welcome.")]);
+    const first = await handleInbound(inbound("hi", "evt-q1", "whatsapp", "15550002222"), { ...d, deliver: async () => ({ ok: true, status: 200, channel: "whatsapp" as const, messageId: "wamid.a" }) });
+    const conversation = (await s.getConversation(first.conversationId!))!;
+    const outbound = await s.appendTurn({ conversationId: conversation.id, role: "assistant", content: "Your booking is confirmed.", checkpoint: { kind: "owner_decision", text: "Your booking is confirmed.", delivery: "pending" } });
+    const closed = vi.fn(async () => ({ ok: false, status: 400, channel: "whatsapp" as const, errorCode: 131047, outOfWindow: true }));
+    const res = await deliverAndRecord(s, closed, conversation, outbound, "Your booking is confirmed.");
+    expect(res.ok).toBe(false);
+    const queuedTurn = (await s.listTurns(conversation.id)).at(-1)!;
+    expect(queuedTurn.checkpoint).toMatchObject({ kind: "outbound_result", status: "queued", reason: "outside_24h_window", errorCode: 131047 });
+    const state = await ownerState(s, SEED_BUSINESS_ID);
+    expect(state.conversations!.find((c) => c.id === conversation.id)).toMatchObject({ queuedReplies: 1 });
+
+    const sent: string[] = [];
+    const open = vi.fn(async (_c: unknown, text: string) => (sent.push(text), { ok: true, status: 200, channel: "whatsapp" as const, messageId: `wamid.${sent.length}` }));
+    await handleInbound(inbound("thanks", "evt-q2", "whatsapp", "15550002222"), { ...d, deliver: open });
+    expect(sent[0]).toBe("Your booking is confirmed.");
+    const results = (await s.listTurns(conversation.id)).filter((t) => t.checkpoint?.kind === "outbound_result" && t.checkpoint.outboundTurnId === outbound.id);
+    expect(results.map((t) => t.checkpoint!.status)).toEqual(["queued", "sent"]);
+    expect((await ownerState(s, SEED_BUSINESS_ID)).conversations!.find((c) => c.id === conversation.id)).toMatchObject({ queuedReplies: 0 });
   });
 });
