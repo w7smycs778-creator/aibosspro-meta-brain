@@ -158,7 +158,7 @@ export function OwnerScreen() {
               )}
             </h1>
             <span className="space-x-2">
-              <a href="/onboard" className="rounded border px-2 py-1 hover:bg-gray-100">
+              <a href={state?.business ? `/onboard?business=${encodeURIComponent(state.business.id)}` : "/onboard"} className="rounded border px-2 py-1 hover:bg-gray-100">
                 Onboarding / brain review
               </a>
               <button onClick={reset} className="rounded border px-2 py-1 hover:bg-gray-100">

@@ -81,7 +81,9 @@ async function toWav16k(blob: Blob): Promise<Blob> {
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 const slug = (name: string) => name.toLowerCase().replace(/\+/g, " and ").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "service";
 
-export function Onboarding() {
+/** Onboarding for one business, chosen on the owner screen and passed in the URL (?business=). */
+export function Onboarding({ businessId, businessName }: { businessId: string; businessName: string }) {
+  const q = `business=${encodeURIComponent(businessId)}`;
   const [versions, setVersions] = useState<Version[]>([]);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -92,11 +94,11 @@ export function Onboarding() {
   const chunks = useRef<Blob[]>([]);
 
   const refresh = useCallback(async () => {
-    const { versions } = await call("/api/brain", "GET");
+    const { versions } = await call(`/api/brain?${q}`, "GET");
     setVersions(versions);
     const draft = versions.find((v: Version) => !v.approved);
     setEdit(draft ? structuredClone(draft.brain) : null);
-  }, []);
+  }, [q]);
 
   useEffect(() => {
     void refresh();
@@ -124,11 +126,11 @@ export function Onboarding() {
       setStatus("Transcribing with Meta Voice Transcribe...");
       const form = new FormData();
       form.append("audio", wav, "voice-note.wav");
-      const res = await fetch("/api/onboard/transcribe", { method: "POST", body: form });
+      const res = await fetch(`/api/onboard/transcribe?${q}`, { method: "POST", body: form });
       const t = await res.json();
       if (!res.ok) throw new Error(t.error ?? `HTTP ${res.status}`);
       setStatus("Extracting the brain draft with Muse Spark...");
-      await call("/api/onboard/extract", "POST", { text: t.transcript, sourceKind: "voice", audioPath: t.audioPath });
+      await call(`/api/onboard/extract?${q}`, "POST", { text: t.transcript, sourceKind: "voice", audioPath: t.audioPath });
       await refresh();
       setStatus("Draft ready for review.");
     });
@@ -136,7 +138,7 @@ export function Onboarding() {
 
   async function fromText() {
     await run("Extracting the brain draft with Muse Spark...", async () => {
-      await call("/api/onboard/extract", "POST", { text: typed, sourceKind: "text" });
+      await call(`/api/onboard/extract?${q}`, "POST", { text: typed, sourceKind: "text" });
       await refresh();
       setStatus("Draft ready for review.");
     });
@@ -171,17 +173,17 @@ export function Onboarding() {
   }
 
   const save = () => run("Saving edits...", async () => {
-    await call(`/api/brain/${draft!.version}`, "PUT", { brain: normalised(edit!) });
+    await call(`/api/brain/${draft!.version}?${q}`, "PUT", { brain: normalised(edit!) });
     await refresh();
     setStatus("Edits saved.");
   });
   const approve = () => run("Approving...", async () => {
-    await call(`/api/brain/${draft!.version}/approve`, "POST", { brain: normalised(edit!) });
+    await call(`/api/brain/${draft!.version}/approve?${q}`, "POST", { brain: normalised(edit!) });
     await refresh();
     setStatus(`Brain v${draft!.version} approved. The engine uses it from the next customer message.`);
   });
   const discard = () => run("Discarding...", async () => {
-    await call(`/api/brain/${draft!.version}`, "DELETE");
+    await call(`/api/brain/${draft!.version}?${q}`, "DELETE");
     await refresh();
     setStatus("Draft discarded.");
   });
@@ -191,8 +193,11 @@ export function Onboarding() {
   return (
     <main className="min-h-screen space-y-4 bg-gray-50 p-4 text-sm text-gray-900">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Onboarding: tell Meta Brain how the business works</h1>
-        <a href="/owner" className="underline">Owner screen</a>
+        <h1 className="text-lg font-semibold">Onboarding: {businessName}</h1>
+        <span className="space-x-3">
+          <a href="/onboard" className="underline">Other business</a>
+          <a href={`/owner?${q}`} className="underline">Owner screen</a>
+        </span>
       </div>
       <p className="text-gray-600">
         Approved brain: {approved ? `v${approved.version} (${approved.brain.name})` : "none"}
