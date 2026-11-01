@@ -1,6 +1,6 @@
 // Owner actions and the owner screen's view of the store.
 import type { Booking, BrainVersion, Conversation, ConversationMode, PendingApproval, Storage, Turn } from "../storage/types";
-import { channelDeliver, deliverAndRecord, type Deliver, type DeliveryResult } from "./delivery";
+import { channelDeliver, deliverAndRecord, queuedOutbound, type Deliver, type DeliveryResult } from "./delivery";
 import { formatWithZone } from "./display";
 import { brainLangs, detectLanguage, serviceName, STRINGS } from "./i18n";
 
@@ -98,7 +98,7 @@ export async function ownerState(store: Storage, businessId: string) {
     (await store.listConversations(businessId)).map(async (c) => {
       const turns = await store.listTurns(c.id);
       const last = [...turns].reverse().find((t) => t.role === "customer");
-      return { ...c, lastCustomerMessage: last?.content ?? null, turnCount: turns.length };
+      return { ...c, lastCustomerMessage: last?.content ?? null, turnCount: turns.length, queuedReplies: queuedOutbound(turns).length };
     }),
   );
   return {

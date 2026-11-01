@@ -212,3 +212,15 @@ describe("POST events", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("sendText results", () => {
+  it("returns the message id on success and the Graph error code on failure, without the body", async () => {
+    const { sendText } = await import("./send");
+    const env = { WHATSAPP_PHONE_NUMBER_ID: PHONE_ID, WHATSAPP_ACCESS_TOKEN: ACCESS_TOKEN };
+    const ok = vi.fn(async () => new Response(JSON.stringify({ messages: [{ id: "wamid.sent.1" }] }), { status: 200 }));
+    expect(await sendText("15550001234", "hi", env, ok as unknown as typeof fetch)).toEqual({ ok: true, status: 200, messageId: "wamid.sent.1" });
+    const closed = vi.fn(async () => new Response(JSON.stringify({ error: { code: 131047, message: "Re-engagement message" } }), { status: 400 }));
+    expect(await sendText("15550001234", "hi", env, closed as unknown as typeof fetch)).toEqual({ ok: false, status: 400, errorCode: 131047, outOfWindow: true });
+  });
+});
+

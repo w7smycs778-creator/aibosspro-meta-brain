@@ -10,7 +10,7 @@ type OwnerState = {
   businessName?: string;
   brain?: { version: number; approved: boolean; name: string } | null;
   approvedVersion?: number | null;
-  conversations?: Array<{ id: string; channel: string; externalId: string; mode: Mode; state: string; lastCustomerMessage: string | null }>;
+  conversations?: Array<{ id: string; channel: string; externalId: string; mode: Mode; state: string; lastCustomerMessage: string | null; queuedReplies?: number }>;
   approvals?: Array<{ id: string; conversationId: string | null; booking: null | { serviceName: string; when: string; customerName: string | null; customerContact: string | null } }>;
   bookings?: Array<{ id: string; serviceName: string; when: string; status: string; customerName: string | null }>;
   inference?: { live: boolean; reason: string | null };
@@ -197,6 +197,11 @@ export function OwnerScreen() {
                   <span>
                     {c.channel} · {c.state}
                     {c.id === panelConversationId ? " · this panel" : ""}
+                    {c.queuedReplies ? (
+                      <span className="ml-2 rounded bg-amber-100 px-1 text-amber-800" title="The customer's 24-hour WhatsApp window is closed; sent automatically when they write again.">
+                        {c.queuedReplies} queued: waiting for the customer to write
+                      </span>
+                    ) : null}
                   </span>
                   <span className="space-x-1">
                     {MODES.map((m) => (

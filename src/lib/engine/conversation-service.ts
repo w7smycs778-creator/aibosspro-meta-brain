@@ -8,7 +8,7 @@ import type { BrainVersion, BusinessBrain, Channel, Conversation, ConversationMo
 import { ENGINE_MAX_OUTPUT_TOKENS, ENGINE_REASONING_EFFORT, disclosureFor, engineDeps, type EngineDeps } from "./deps";
 import { brainLangs, detectLanguage, STRINGS, type Lang } from "./i18n";
 import { brainFacts } from "./brain-prompt";
-import { channelDeliver, deliverAndRecord } from "./delivery";
+import { channelDeliver, deliverAndRecord, deliverQueued } from "./delivery";
 import { resumeConversation } from "./resume";
 import { localDate, weekdayOf } from "./time";
 import { ENGINE_TOOLS } from "./tools";
@@ -99,6 +99,8 @@ export async function handleInbound(input: InboundInput, deps?: EngineDeps): Pro
     throw Object.assign(err as Error, { retryable: true });
   }
   await store.updateConversation(conversation.id, {});
+  // The customer's message reopens the 24-hour window: replies queued while it was closed go out first.
+  await deliverQueued(store, deliver, conversation).catch((err) => console.error("queued delivery failed", { error: (err as Error).message }));
 
   let outcome: InboundResult["outcome"];
   let replyText: string | null = null;

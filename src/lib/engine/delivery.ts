@@ -4,13 +4,22 @@
 import type { Conversation, Storage, Turn } from "../storage/types";
 import { sendText } from "../whatsapp/send";
 
-export type DeliveryResult = { ok: boolean; status: number | null; channel: Conversation["channel"] };
+export type DeliveryResult = {
+  ok: boolean;
+  status: number | null;
+  channel: Conversation["channel"];
+  /** WhatsApp message id (wamid) of a sent message. */
+  messageId?: string;
+  errorCode?: number;
+  /** The customer's 24-hour window is closed; the message is queued until they write again. */
+  outOfWindow?: boolean;
+};
 export type Deliver = (conversation: Conversation, text: string) => Promise<DeliveryResult>;
 
 export const channelDeliver: Deliver = async (conversation, text) => {
   if (conversation.channel === "panel") return { ok: true, status: null, channel: "panel" };
   const res = await sendText(conversation.externalId, text);
-  return { ok: res.ok, status: res.status, channel: "whatsapp" };
+  return { ok: res.ok, status: res.status, channel: "whatsapp", ...(res.messageId && { messageId: res.messageId }), ...(res.errorCode !== undefined && { errorCode: res.errorCode }), ...(res.outOfWindow && { outOfWindow: true }) };
 };
 
 /**
@@ -33,11 +42,42 @@ export async function deliverAndRecord(
     result = { ok: false, status: null, channel: conversation.channel };
     extra = { ...extra, error: (err as Error).name };
   }
+  const status = result.ok ? "sent" : result.outOfWindow ? "queued" : "failed";
   await store.appendTurn({
     conversationId: conversation.id,
     role: "system",
-    content: result.ok ? `Delivered on ${result.channel}.` : `Delivery on ${result.channel} failed.`,
-    checkpoint: { kind: "outbound_result", outboundTurnId: outbound.id, status: result.ok ? "sent" : "failed", httpStatus: result.status, ...extra },
+    content: result.ok
+      ? `Delivered on ${result.channel}.`
+      : result.outOfWindow
+        ? "Queued: the customer's 24-hour WhatsApp window is closed. It is sent when they write again."
+        : `Delivery on ${result.channel} failed.`,
+    checkpoint: {
+      kind: "outbound_result",
+      outboundTurnId: outbound.id,
+      status,
+      httpStatus: result.status,
+      ...(result.messageId && { messageId: result.messageId }),
+      ...(result.errorCode !== undefined && { errorCode: result.errorCode }),
+      ...(result.outOfWindow && { reason: "outside_24h_window" }),
+      ...extra,
+    },
   });
+  if (result.channel === "whatsapp") console.log("whatsapp outbound", { outboundTurnId: outbound.id, status, httpStatus: result.status, wamid: result.messageId ?? null, errorCode: result.errorCode ?? null });
   return result;
+}
+
+/** Outbound turns whose latest result is "queued" (window closed), oldest first. */
+export function queuedOutbound(turns: Turn[]): Turn[] {
+  const latest = new Map<string, string>();
+  for (const t of turns) if (t.checkpoint?.kind === "outbound_result") latest.set(String(t.checkpoint.outboundTurnId), String(t.checkpoint.status));
+  return turns.filter((t) => latest.get(t.id) === "queued");
+}
+
+/** Sends every queued outbound turn once; called when the customer writes again, which reopens the window. */
+export async function deliverQueued(store: Storage, deliver: Deliver, conversation: Conversation): Promise<number> {
+  const queued = queuedOutbound(await store.listTurns(conversation.id));
+  for (const outbound of queued) {
+    await deliverAndRecord(store, deliver, conversation, outbound, String(outbound.checkpoint?.text ?? outbound.content), { retriedAfterInbound: true });
+  }
+  return queued.length;
 }
