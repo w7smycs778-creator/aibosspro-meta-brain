@@ -50,8 +50,15 @@ export class MetaDispatcher implements Dispatcher {
     if (configError) throw new PreDispatchError("dispatcher_not_configured", configError);
     const baseUrl = this.env.MODEL_API_BASE_URL!.replace(/\/+$/, "");
     const key = this.env.MODEL_API_KEY!;
+    return this.request(call, baseUrl, { Authorization: `Bearer ${key}` });
+  }
 
-    const auth = { Authorization: `Bearer ${key}` };
+  /**
+   * Builds the request for a call, sends it with this dispatcher's fetch and
+   * parses the answer. Only dispatch() (behind the live-credit guard) and the
+   * demo's ReplayDispatcher (whose fetch replays recordings) call it.
+   */
+  protected async request(call: ModelCall, baseUrl: string, auth: Record<string, string>): Promise<DispatchResult> {
     switch (call.kind) {
       case "chat":
         return this.chat(`${baseUrl}/chat/completions`, auth, call);
