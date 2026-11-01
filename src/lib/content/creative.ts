@@ -14,6 +14,7 @@ import { dirname } from "node:path";
 import { contentTypeOf, FsMediaStore, mediaStoreFor, SupabaseMediaStore, type MediaStore } from "./media-store";
 import { carryMetadata, inspectImage, providerRequestId, sha256, xmpOf, type Carried, type ImageFacts } from "./provenance";
 import { buildCutout, describeOutput, parseSegmentation } from "./segment";
+import { runCreativeQc, type QcVerdict } from "../engine/creative-qc";
 
 export { mediaRoot } from "./media-store";
 
@@ -144,15 +145,19 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
   const band: Band = { name: brain.name, headline: offer.headline, price: offer.priceText, note: offer.kind === "discount" ? `Normally ${offer.listPriceText}` : null };
   const parts = { scene, brandColor: brandColor(brain.name), subject, subjectKind: "cutout" as const, band };
   const preserved: Record<string, Carried> = {};
+  let feedPng: Buffer | null = null;
   for (const kind of ["feed", "story"] as const) {
     const { png, carried } = await carryMetadata(await composite(parts, kind), museFacts, museXmp);
     await save(`${kind}.png`, png, `${kind} export`);
     preserved[kind] = carried;
+    if (kind === "feed") feedPng = png;
   }
 
   const { caption, log } = await writeCaption(deps, brain, offer, input.businessId);
+  // Wonder looks at the finished feed export; its verdict is shown to the owner and decides nothing.
+  const qc = await runCreativeQc(deps.gateway, { feed: feedPng!, priceText: offer.priceText, object, businessId: input.businessId }, deps.now);
 
-  const manifest: AssetManifest = { creativeId: id, createdAt: deps.now().toISOString(), store: media.kind, assets, museImage: muse, preserved };
+  const manifest: AssetManifest = { creativeId: id, createdAt: deps.now().toISOString(), store: media.kind, assets, museImage: muse, preserved, qc };
   await media.put(ref("manifest.json"), JSON.stringify(manifest, null, 2), "application/json");
 
   return store.createCreative({
@@ -165,7 +170,7 @@ export async function generateCreative(deps: EngineDeps, input: GenerateInput): 
     media: { original: ref("original.jpg"), cutout: cutoutRef, scene: scene ? ref("scene.png") : null, feed: ref("feed.png"), story: ref("story.png"), sceneOriginal: sceneOriginalRef, manifest: ref("manifest.json") },
     cutoutKind,
     sceneKind,
-    diagnostics: { ...diagnostics, band },
+    diagnostics: { ...diagnostics, band, qc },
   });
 }
 
@@ -190,6 +195,8 @@ export type AssetManifest = {
   museImage: MuseRecord;
   /** Per export: what was carried over from the Muse output, and what was not and why. */
   preserved: Record<string, Carried>;
+  /** Muse Wonder's check of the feed export (advisory). */
+  qc: QcVerdict;
 };
 
 /** The media store a ref belongs to: Supabase Storage refs, else the creative's folder on disk. */
@@ -279,10 +286,17 @@ export async function regenerateCreative(deps: EngineDeps, creativeId: string, o
   const sceneXmp = sceneOriginal && sceneFacts?.xmp ? await xmpOf(sceneOriginal) : null;
   const band = (creative.diagnostics.band as Band | undefined) ?? { name: brain.name, headline: offer.headline, price: offer.priceText, note: offer.kind === "discount" ? `Normally ${offer.listPriceText}` : null };
   const parts = { scene, brandColor: brandColor(brain.name), subject: cutoutKind === "unavailable" ? original : subject, subjectKind: cutoutKind === "unavailable" ? ("framed" as const) : ("cutout" as const), band };
+  let feedPng: Buffer | null = null;
   for (const kind of ["feed", "story"] as const) {
     const { png } = await carryMetadata(await composite(parts, kind), sceneFacts, sceneXmp);
     await media.put(creative.media[kind], png, "image/png");
+    if (kind === "feed") feedPng = png;
   }
+  diagnostics.qc = await runCreativeQc(
+    deps.gateway,
+    { feed: feedPng!, priceText: offer.priceText, object: String(diagnostics.object ?? opts.object), businessId: creative.businessId },
+    deps.now,
+  );
 
   let caption = creative.caption;
   let captionLog = creative.captionLog;

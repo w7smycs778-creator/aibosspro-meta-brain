@@ -79,14 +79,26 @@ export type SegmentCall = CallBase & {
   mimeType: "image/png" | "image/jpeg" | "image/webp";
 };
 
-export type ModelCall = ChatCall | TranscribeCall | ImageCall | SegmentCall;
+/** One image and a text instruction to a model that reads images (Chat Completions image_url part), text answer. */
+export type VisionCall = CallBase & {
+  kind: "vision";
+  prompt: string;
+  image: Uint8Array;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  maxOutputTokens: number;
+  jsonSchema?: JsonSchemaFormat;
+  reasoningEffort?: ChatCall["reasoningEffort"];
+};
+
+export type ModelCall = ChatCall | TranscribeCall | ImageCall | SegmentCall | VisionCall;
 
 /** Billable units reported by the provider for one attempt. */
 export type BillingUnits =
   | { kind: "chat"; promptTokens: number; cachedTokens: number; completionTokens: number; reasoningTokens?: number }
   | { kind: "transcribe"; audioMs: number }
   | { kind: "image"; images: number }
-  | { kind: "segment"; images: number };
+  | { kind: "segment"; images: number }
+  | { kind: "vision"; promptTokens: number; cachedTokens: number; completionTokens: number; reasoningTokens?: number };
 
 export type DispatchResult = {
   ok: boolean;

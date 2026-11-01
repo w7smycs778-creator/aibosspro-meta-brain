@@ -40,6 +40,12 @@ export function boundsViolation(call: ModelCall, b: GatewayBounds): string | nul
       return Buffer.byteLength(call.prompt, "utf8") > b.maxInputBytes ? "prompt too long" : null;
     case "segment":
       return call.image.byteLength > b.maxMediaBytes ? `image ${call.image.byteLength} bytes > ${b.maxMediaBytes}` : null;
+    case "vision":
+      if (!Number.isInteger(call.maxOutputTokens) || call.maxOutputTokens < 1 || call.maxOutputTokens > b.maxOutputTokens) {
+        return `maxOutputTokens ${call.maxOutputTokens} outside 1..${b.maxOutputTokens}`;
+      }
+      if (Buffer.byteLength(call.prompt, "utf8") > b.maxInputBytes) return "prompt too long";
+      return call.image.byteLength > b.maxMediaBytes ? `image ${call.image.byteLength} bytes > ${b.maxMediaBytes}` : null;
   }
 }
 
@@ -147,7 +153,7 @@ function sum(attempts: AttemptRecord[], key: "reservedNano" | "settledNano" | "l
 function usageOf(result: DispatchResult): SpendUsage {
   const units = result.units;
   const tokens: Pick<SpendUsage, "tokensIn" | "tokensOut" | "reasoningTokens"> =
-    units?.kind === "chat"
+    units?.kind === "chat" || units?.kind === "vision"
       ? { tokensIn: units.promptTokens, tokensOut: units.completionTokens, reasoningTokens: units.reasoningTokens ?? null }
       : { tokensIn: 0, tokensOut: 0, reasoningTokens: null };
   return {

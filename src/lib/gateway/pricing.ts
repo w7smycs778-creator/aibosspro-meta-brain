@@ -6,7 +6,16 @@ import type { BillingUnits, ChatMessage, ModelCall } from "./types";
 export type ChatPrice = { kind: "chat"; inputPerToken: NanoUsd; cachedPerToken: NanoUsd; outputPerToken: NanoUsd };
 type TranscribePrice = { kind: "transcribe"; perSecond: NanoUsd };
 type PerImagePrice = { kind: "image" | "segment"; perImage: NanoUsd };
-export type Price = ChatPrice | TranscribePrice | PerImagePrice;
+/** Token-priced like chat; the image's input tokens are not documented, so the reservation assumes VISION_IMAGE_TOKENS. */
+export type VisionPrice = { kind: "vision"; inputPerToken: NanoUsd; cachedPerToken: NanoUsd; outputPerToken: NanoUsd };
+export type Price = ChatPrice | TranscribePrice | PerImagePrice | VisionPrice;
+
+/**
+ * Input tokens reserved for one image. Meta does not document how image input
+ * is counted (pricing page fetched 2026-11-01); this is an assumption for the
+ * reservation only. Settlement uses the provider-reported prompt tokens.
+ */
+export const VISION_IMAGE_TOKENS = 8_192;
 
 const SPARK: ChatPrice = { kind: "chat", inputPerToken: 1_250, cachedPerToken: 150, outputPerToken: 4_250 };
 
@@ -19,6 +28,8 @@ export const PRICES: PriceTable = {
   "muse-image-1.0": { kind: "image", perImage: 10_000_000 },
   // $2.50 per 1,000 images.
   "sam-3.1": { kind: "segment", perImage: 2_500_000 },
+  // $4.00 input / $0.20 cached / $20.00 output per 1M tokens (pricing page, fetched 2026-11-01).
+  "muse-wonder-1.0": { kind: "vision", inputPerToken: 4_000, cachedPerToken: 200, outputPerToken: 20_000 },
 };
 
 /** Per-message framing allowance on top of content bytes. */
@@ -74,6 +85,12 @@ export function estimateMaxCost(call: ModelCall, prices: PriceTable = PRICES): N
       return call.n * (price as PerImagePrice).perImage;
     case "segment":
       return (price as PerImagePrice).perImage;
+    case "vision": {
+      const p = price as VisionPrice;
+      let inputTokens = utf8.encode(call.prompt).length + MESSAGE_OVERHEAD_TOKENS + VISION_IMAGE_TOKENS;
+      if (call.jsonSchema) inputTokens += utf8.encode(JSON.stringify(call.jsonSchema)).length + MESSAGE_OVERHEAD_TOKENS;
+      return inputTokens * p.inputPerToken + call.maxOutputTokens * p.outputPerToken;
+    }
   }
 }
 
@@ -82,8 +99,9 @@ export function actualCost(call: ModelCall, units: BillingUnits | null, prices: 
   const price = priceFor(call, prices);
   if (!price || !units || units.kind !== call.kind) return null;
   switch (units.kind) {
-    case "chat": {
-      const p = price as ChatPrice;
+    case "chat":
+    case "vision": {
+      const p = price as ChatPrice | VisionPrice;
       const cached = Math.min(units.cachedTokens, units.promptTokens);
       return (
         (units.promptTokens - cached) * p.inputPerToken +
