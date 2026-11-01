@@ -491,3 +491,9 @@ describe("media provenance and hosted media", () => {
   });
 });
 
+
+describe("SupabaseMediaStore.fromEnv", () => {
+  it("constructs on this Node without a WebSocket (realtime is never used)", () => {
+    expect(() => SupabaseMediaStore.fromEnv({ SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-placeholder" })).not.toThrow();
+  });
+});

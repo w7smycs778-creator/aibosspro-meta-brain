@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Env } from "../gateway/types";
 import { DEFAULT_LOCAL_DIR } from "../storage";
+import { NoRealtimeTransport } from "../storage/supabase-store";
 import type { StorageBackend } from "../storage/types";
 
 export const MEDIA_BUCKET = "creative-media";
@@ -69,7 +70,13 @@ export class SupabaseMediaStore implements MediaStore {
     const url = env.SUPABASE_URL;
     const key = env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url?.startsWith("https://") || !key) throw new Error("Supabase media store needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
-    return new SupabaseMediaStore(createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }));
+    return new SupabaseMediaStore(
+      createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        // As in SupabaseStore: on Node 20 the realtime client throws at construction without a WebSocket.
+        realtime: { transport: NoRealtimeTransport as never },
+      }),
+    );
   }
 
   ref(creativeId: string, file: string): string {
