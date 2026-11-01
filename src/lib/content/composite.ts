@@ -3,6 +3,7 @@
 // business name, offer line and price exactly as computed from the brain.
 // No model touches these pixels.
 import sharp from "sharp";
+import { textPath } from "./text";
 
 export const SIZES = { feed: { w: 1080, h: 1080 }, story: { w: 1080, h: 1920 } } as const;
 export type SizeName = keyof typeof SIZES;
@@ -18,9 +19,10 @@ export type CompositeParts = {
   band: Band;
 };
 
-const LAYOUT: Record<SizeName, { band: number; box: { w: number; h: number }; bottom: number; name: number; headline: number; price: number }> = {
-  feed: { band: 300, box: { w: 720, h: 620 }, bottom: 50, name: 34, headline: 50, price: 112 },
-  story: { band: 470, box: { w: 900, h: 1150 }, bottom: 170, name: 42, headline: 62, price: 150 },
+/** Price and offer are the largest text: readable when the feed image is shown at phone width (~360 px). */
+const LAYOUT: Record<SizeName, { band: number; box: { w: number; h: number }; bottom: number; name: number; headline: number; price: number; note: number }> = {
+  feed: { band: 400, box: { w: 680, h: 580 }, bottom: 40, name: 30, headline: 72, price: 150, note: 34 },
+  story: { band: 600, box: { w: 900, h: 1100 }, bottom: 150, name: 40, headline: 92, price: 200, note: 44 },
 };
 
 /** A deterministic brand colour from the business name. */
@@ -31,28 +33,47 @@ export function brandColor(name: string): string {
   return palette[h % palette.length];
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** Split a label in two at the separator (" · ", else a space) nearest its middle. */
+export function splitLine(text: string): [string, string] | null {
+  const cuts = [...text.matchAll(/ · | /g)].map((m) => ({ at: m.index!, len: m[0].length, dot: m[0] === " · " }));
+  if (!cuts.length) return null;
+  const mid = text.length / 2;
+  const pool = cuts.some((c) => c.dot) ? cuts.filter((c) => c.dot) : cuts;
+  const best = pool.reduce((a, b) => (Math.abs(b.at - mid) < Math.abs(a.at - mid) ? b : a));
+  const keepDot = best.dot ? " ·" : "";
+  return [text.slice(0, best.at) + keepDot, text.slice(best.at + best.len)];
 }
 
-/** The text band as SVG. The strings are rendered exactly as given. */
+/** The offer line: one line when it fits at 75% of its size or more, otherwise two lines. */
+function headlineLines(text: string, L: { band: number; headline: number }, cx: number, maxWidth: number): string[] {
+  const one = textPath({ text, cx, y: Math.round(L.band * 0.38), size: L.headline, minSize: 1, maxWidth, weight: 700, fill: "#ffffff" });
+  const split = splitLine(text);
+  if (one.size >= L.headline * 0.75 || !split) return [one.svg];
+  const size = Math.round(L.headline * 0.85);
+  return split.map((line, i) => textPath({ text: line, cx, y: Math.round(L.band * 0.27 + i * size * 1.05), size, minSize: 1, maxWidth, weight: 700, fill: "#ffffff" }).svg);
+}
+
+/**
+ * The text band as SVG. The strings are drawn exactly as given, as paths from
+ * the bundled fonts (src/lib/content/text.ts), never as <text>: a host without
+ * fonts (Vercel) would otherwise render empty boxes.
+ */
 export function bandSvg(band: Band, size: SizeName): string {
   const { w } = SIZES[size];
   const L = LAYOUT[size];
-  const headlineSize = band.headline.length > 30 ? Math.round(L.headline * (30 / band.headline.length)) : L.headline;
-  const font = "Helvetica Neue, Helvetica, Arial, sans-serif";
-  const y1 = Math.round(L.band * 0.2);
-  const y2 = Math.round(L.band * 0.42);
-  const y3 = Math.round(L.band * (band.note ? 0.78 : 0.82));
+  const maxWidth = w - 80;
+  const cx = w / 2;
+  const name = textPath({ text: band.name.toUpperCase(), cx, y: Math.round(L.band * 0.13), size: L.name, maxWidth, weight: 600, fill: "#ffffff", opacity: 0.85, letterSpacing: 3 });
+  const headline = headlineLines(band.headline, L, cx, maxWidth);
+  const price = textPath({ text: band.price, cx, y: Math.round(L.band * (band.note ? 0.78 : 0.84)), size: L.price, maxWidth, weight: 800, fill: "#ffd166" });
+  const note = band.note ? textPath({ text: band.note, cx, y: Math.round(L.band * 0.94), size: L.note, maxWidth, weight: 600, fill: "#ffffff", opacity: 0.8 }) : null;
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${L.band}">`,
     `<rect width="${w}" height="${L.band}" fill="#000" fill-opacity="0.62"/>`,
-    `<text x="${w / 2}" y="${y1}" font-family="${font}" font-size="${L.name}" font-weight="600" letter-spacing="4" fill="#ffffff" fill-opacity="0.85" text-anchor="middle">${esc(band.name.toUpperCase())}</text>`,
-    `<text x="${w / 2}" y="${y2}" font-family="${font}" font-size="${headlineSize}" font-weight="700" fill="#ffffff" text-anchor="middle">${esc(band.headline)}</text>`,
-    `<text x="${w / 2}" y="${y3}" font-family="${font}" font-size="${L.price}" font-weight="800" fill="#ffd166" text-anchor="middle">${esc(band.price)}</text>`,
-    ...(band.note
-      ? [`<text x="${w / 2}" y="${Math.round(L.band * 0.94)}" font-family="${font}" font-size="${Math.round(L.name * 0.8)}" fill="#ffffff" fill-opacity="0.8" text-anchor="middle">${esc(band.note)}</text>`]
-      : []),
+    name.svg,
+    ...headline,
+    price.svg,
+    ...(note ? [note.svg] : []),
     `</svg>`,
   ].join("");
 }
