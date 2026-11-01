@@ -29,7 +29,7 @@ MODEL_SPEND_HARD_CAP_USD=5
 LIVE_CREDITS_VERIFIED=true      # set this yourself after checking the key has credit; code never sets it
 ```
 
-then:
+then, in the repository (in a new terminal, first run `nvm use` again, or `. ~/.nvm/nvm.sh && nvm use`, so `node -v` shows the version above):
 
 ```bash
 npm run demo -- --golden        # LIVE golden scenario (about $0.02 to $0.03; capped per run, default $0.30)
