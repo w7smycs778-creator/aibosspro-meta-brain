@@ -37,10 +37,14 @@ function responseOf(seq: number): { kind: string; text: string } {
   return { kind: "text", text: msg?.content ?? "" };
 }
 
+// Where each step's flow is shown in the submission demo video: the hosted run, not this recording.
+const VIDEO: Record<number, string> = { 1: "0:04-0:31", 2: "0:04-0:31", 3: "0:04-0:31", 4: "1:01-1:27", 5: "1:01-1:27" };
+const video = (n: number) => (VIDEO[n] ? `${VIDEO[n]} (same flow, hosted run)` : "–");
+
 const rows: string[] = [];
 for (const s of steps) {
   if (s.kind === "owner_approve") {
-    rows.push(`| ${s.n} | owner taps Approve (${cell(s.approvalId, 12)}) | no model call | – | decideBooking | – | – | ${cell(s.booking?.status)} ${s.booking ? `${s.booking.priceCents} ${s.booking.currency}` : ""} | TBD |`);
+    rows.push(`| ${s.n} | owner taps Approve (${cell(s.approvalId, 12)}) | no model call | – | decideBooking | – | – | ${cell(s.booking?.status)} ${s.booking ? `${s.booking.priceCents} ${s.booking.currency}` : ""} | ${video(s.n)} |`);
     rows.push(`| | reply to customer | | | | | | ${cell(s.reply, 120)} | |`);
     continue;
   }
@@ -55,7 +59,7 @@ for (const s of steps) {
     const l = ledgerRows.shift();
     const booking = i === s.modelCalls.length - 1 ? s.bookings.map((b: any) => `${b.status} ${b.serviceId} ${b.startsAt} ${b.priceCents} ${b.currency}`).join("; ") || "none" : "";
     rows.push(
-      `| ${i === 0 ? s.n : ""} | ${i === 0 ? cell(s.input, 70) : ""} | #${seq} \`${c.path}\` ${c.model}, req id \`${c.providerRequestId ?? "not returned"}\`, ${c.latencyMs} ms | ${r.kind}: ${cell(r.text, 110)} (finish ${c.finishReason ?? "not returned"}) | ${tool ? `${tool.ok ? "ok" : "error"}: ${cell(JSON.stringify(tool.ok ? tool.output : tool.error), 90)}` : "–"} | ${v ? `${v.pass ? "PASS" : "**BLOCK**"} ${v.target}${v.pass ? "" : `: ${cell(v.failed.join("; "), 60)}`}` : "–"} | ${l ? `reserved ${usd(l.reservedUsd)}, settled ${usd(l.settledUsd)}; in ${l.tokensIn}, out ${l.tokensOut} (reasoning ${l.reasoningTokens ?? "not returned"})` : "–"} | ${cell(booking, 80)} | TBD |`,
+      `| ${i === 0 ? s.n : ""} | ${i === 0 ? cell(s.input, 70) : ""} | #${seq} \`${c.path}\` ${c.model}, req id \`${c.providerRequestId ?? "not returned"}\`, ${c.latencyMs} ms | ${r.kind}: ${cell(r.text, 110)} (finish ${c.finishReason ?? "not returned"}) | ${tool ? `${tool.ok ? "ok" : "error"}: ${cell(JSON.stringify(tool.ok ? tool.output : tool.error), 90)}` : "–"} | ${v ? `${v.pass ? "PASS" : "**BLOCK**"} ${v.target}${v.pass ? "" : `: ${cell(v.failed.join("; "), 60)}`}` : "–"} | ${l ? `reserved ${usd(l.reservedUsd)}, settled ${usd(l.settledUsd)}; in ${l.tokensIn}, out ${l.tokensOut} (reasoning ${l.reasoningTokens ?? "not returned"})` : "–"} | ${cell(booking, 80)} | ${video(s.n)} |`,
     );
   }
 }
@@ -98,7 +102,7 @@ ${replayInv.filter((r: any) => !inv.some((i: any) => i.name === r.name)).map((r:
 
 ## Reproduce
 
-- Offline, exactly this run: \`npm run demo -- --replay\` (no API key needed; any request that differs from the recording stops the run).
+- Offline, exactly this run: \`npm run demo -- --replay\` (no API key needed; any request that differs from the recording stops the run) (shown in the demo video at 2:08-2:31).
 - Live, with a changed input: \`npm run demo -- --golden --time 11:00\` (needs a model API key; capped by DEMO_CAP_USD, default $0.30). It asserts the invariants above, not the wording: the slot is held pending approval, the booked price equals \`priceOn\` (code-computed), owner approval confirms it, the Hebrew reply is a verified model reply, every final reply has a verifier verdict, and the verifier blocks at least one reply.
 
 ## Wonder creative QC (hosted content run)
@@ -114,7 +118,7 @@ ${(() => {
     "",
     "| Step | Input | API request | Raw response | Tool result | Verifier verdict | Ledger | Booking state | Video |",
     "|---|---|---|---|---|---|---|---|---|",
-    `| QC | feed export of creative \`${w.creativeId.slice(0, 8)}\` (${w.qc?.sent ?? "not recorded"}), object "${w.object}" | \`/v1/chat/completions\` muse-wonder-1.0, image_url part, json_schema \`creative_qc\` | ${cell(JSON.stringify(w.qc?.answer ?? null), 140)} | – | QC ${String(w.qc?.status ?? "not recorded").toUpperCase()} (advisory; decided by code from the three checks; the owner approves) | ${row ? `reserved ${usd(row.reservedUsd)}, settled ${usd(row.settledUsd)}; in ${row.tokensIn}, out ${row.tokensOut} (reasoning ${row.reasoningTokens ?? "not returned"})` : "–"} | creative ${w.status} | TBD |`,
+    `| QC | feed export of creative \`${w.creativeId.slice(0, 8)}\` (${w.qc?.sent ?? "not recorded"}), object "${w.object}" | \`/v1/chat/completions\` muse-wonder-1.0, image_url part, json_schema \`creative_qc\` | ${cell(JSON.stringify(w.qc?.answer ?? null), 140)} | – | QC ${String(w.qc?.status ?? "not recorded").toUpperCase()} (advisory; decided by code from the three checks; the owner approves) | ${row ? `reserved ${usd(row.reservedUsd)}, settled ${usd(row.settledUsd)}; in ${row.tokensIn}, out ${row.tokensOut} (reasoning ${row.reasoningTokens ?? "not returned"})` : "–"} | creative ${w.status} | 1:43-2:08 (same flow, hosted run) |`,
     "",
     `Whole content run: ${w.ledger.length} calls (${w.ledger.map((l: any) => l.model).join(", ")}), ${usd(total)} (n=1). The provider request id for this call was not kept in the hosted record.`,
   ].join("\n");
