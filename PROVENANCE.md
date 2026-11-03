@@ -179,6 +179,7 @@ Mock tests only; no model calls; ./data not reset or modified.
 - Clean-clone check: Codex (codex-cli 0.164.0) followed README.md in a fresh clone (the repository has no AGENTS.md; Codex also loaded its own user-level instructions, which say nothing about this project). Its sandbox was widened for network access and the npm and node-gyp caches; for LIVE, the operator placed the key in the clone's `.env` as the README instructs. Five REPLAY attempts and two LIVE attempts surfaced Node-version gaps (fixed: Node 22.12+/20.19+, engine-strict, version check, nvm fallbacks, re-select Node in a new terminal) and one harness issue (stdin). Final: REPLAY PASS in 33 s, LIVE PASS in 35 s ($0.030820), with no README confusion reported.
 - 2026-11-02 GOLDEN-RUN Video column: the demo video timestamps where each step's flow is shown (steps 1-3 0:04-0:31, steps 4-5 1:01-1:27, Wonder QC 1:43-2:08, each marked "same flow, hosted run"; the --replay judge run at 2:08-2:31), set in scripts/golden-report.ts and regenerated from the same traces (77d88b1, merged de12e49).
 - 2026-11-03 Owner trial: two business owners in Israel (a services business and a barbershop) tried the production build hands-on; both said they would use it. Their words are quoted in the submission's Project Description. Documentation only; no code changed.
+- 2026-11-03 LICENSE: MIT license file added and package.json license field set (the repository had no license file). Documentation only; no code changed.
 
 
 ## Third-party
